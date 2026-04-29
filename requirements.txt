@@ -1,0 +1,5 @@
+# Core dependencies (inherited from ml-4m/pyproject.toml via pip install -e ml-4m/)
+# Install with:  pip install -e ml-4m/
+#
+# Additional deps not in ml-4m:
+pyyaml>=6.0

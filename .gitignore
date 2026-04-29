@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Outputs (large — do not commit checkpoints)
+output/
+logs/
+*.pth
+*.pt
+*.safetensors
+
+# Data (never commit raw or tokenized datasets)
+data/
+*_tokens/
+*.npy
+*.npz
+*.tar
+
+# HuggingFace cache
+hf_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WandB
+wandb/
+
+# Slurm output (keep locally, not in repo)
+slurm-*.out

@@ -1,0 +1,45 @@
+# LoRA fine-tuning on NYUv2 semantic segmentation (40 classes)
+# Baseline config matching 4M-21 paper settings (rank=8, attention only)
+# Reference: 4M-21 Appendix G
+
+# Model
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: attention   # selfattn | crossattn | attention | mlp | all
+
+# Task
+task: semseg
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+# Training
+epochs: 50
+batch_size: 8
+accum_iter: 2           # effective batch = 8 * 2 * n_gpus
+blr: 1.0e-4
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 5
+save_ckpt_freq: 10
+
+# Data (update paths on Snellius)
+data_path: '/scratch-shared/tesr125338/nyu_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
+num_workers: 8
+
+# Output
+output_dir: 'output/semseg/nyu_rgb_r8'
+
+# Logging
+log_wandb: false
+wandb_project: '4m-peft'
+wandb_entity: null
+wandb_run_name: 'nyu_semseg_r8_xl'

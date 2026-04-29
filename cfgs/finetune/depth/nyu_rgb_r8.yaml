@@ -19,9 +19,11 @@ num_target_tokens: 196
 loss_type: mod
 
 # Training
+# batch_size=2 per GPU on A100-40GB: XL uses ~25.6 GB at batch=2 (measured).
+# batch=8 would OOM (~75 GB). Use accum_iter=8 to keep effective batch=64 (2*8*4 GPUs).
 epochs: 50
-batch_size: 8
-accum_iter: 2
+batch_size: 2
+accum_iter: 8
 blr: 1.0e-4
 min_blr: 0.0
 weight_decay: 0.05

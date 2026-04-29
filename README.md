@@ -45,12 +45,18 @@ python run_finetuning_lora.py --dry_run --pretrained_model EPFL-VILAB/4M-21_B
 
 Expected output:
 ```
-Total params:     198.0 M
-Trainable (LoRA): 0.xxx M (x.xxx%)
+Total params:     837.2 M
+Trainable (LoRA): 2.802 M (0.335%)
 Forward pass OK. Loss = x.xxxx
 Backward pass OK.
 OK — gradients flow only through LoRA parameters.
+Peak GPU memory allocated: 4204 MiB
 ```
+
+> **Note on model sizes:** The full 4M-21 models include encoder + decoder + tokenizer/detokenizer
+> heads for all 21 modalities, so they are larger than the transformer backbone alone:
+> `4M-21_B` = 837 M params, `4M-21_XL` = 4533 M params (4.5 B).
+> LoRA injects ~0.33% trainable parameters in both cases.
 
 ### 4. Fine-tune (with config file)
 ```bash

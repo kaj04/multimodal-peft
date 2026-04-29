@@ -18,7 +18,8 @@ set -e
 
 module load 2023
 module load Anaconda3/2023.07-2
-source activate 4m-peft
+eval "$(conda shell.bash hook)"
+conda activate 4m-peft
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 REPO_ROOT="$HOME/4m-peft"

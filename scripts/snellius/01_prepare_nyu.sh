@@ -26,7 +26,14 @@ set -e
 
 module load 2023
 module load Anaconda3/2023.07-2
-source activate 4m-peft
+
+# Properly initialise conda on compute nodes
+# (source activate alone is unreliable on Snellius workers)
+eval "$(conda shell.bash hook)"
+conda activate 4m-peft
+
+# Ensure h5py is present (in case env was created before this dependency was added)
+pip install -q h5py
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 REPO_ROOT="$HOME/4m-peft"

@@ -296,34 +296,14 @@ def load_nyu_dataset(hf_cache: str):
             f'Unknown dataset format in {repo_dir}.\nAll files: {all_files}')
 
 
-def _peek_tar_keys(tar_path: str) -> list:
-    """Return the file extensions (keys) of the first sample in a tar archive."""
-    import tarfile
-    keys = []
-    with tarfile.open(tar_path, 'r') as tf:
-        members = tf.getmembers()
-        if not members:
-            return keys
-        # Get the stem of the first file (e.g. '000000' from '000000.jpg')
-        first_stem = os.path.splitext(members[0].name)[0]
-        for m in members:
-            stem = os.path.splitext(m.name)[0]
-            if stem == first_stem:
-                keys.append(os.path.splitext(m.name)[1].lstrip('.'))
-            else:
-                break   # moved to next sample
-    return keys
-
-
 def _load_nyu_webdataset(repo_dir: str, tar_files: list) -> dict:
-    """Load NYUv2 WebDataset tars into a plain dict of lists.
+    """Load NYUv2 WebDataset tars — each .h5 contains rgb + depth.
 
-    Returns {'train': [{'image': PIL, 'depth_map': PIL}, ...],
-             'validation': [...]}
-    compatible with the rest of the pipeline.
+    HDF5 structure discovered from sayakpaul/nyu_depth_v2:
+      rgb:   (3, 480, 640) uint8   channels-first
+      depth: (480, 640)   float32  metric depth in metres
     """
-    import tarfile
-    import io
+    import tarfile, io, h5py
 
     train_tars = sorted(f for f in tar_files
                         if 'train' in os.path.basename(f).lower())
@@ -331,87 +311,42 @@ def _load_nyu_webdataset(repo_dir: str, tar_files: list) -> dict:
                         if any(s in os.path.basename(f).lower()
                                for s in ('val', 'test')))
 
-    print(f'  WebDataset — train tars: {len(train_tars)}, val tars: {len(val_tars)}')
+    print(f'  HDF5/WebDataset — train: {len(train_tars)} tars, val: {len(val_tars)} tars')
 
-    # Peek to discover key names
-    keys = _peek_tar_keys(train_tars[0])
-    print(f'  Keys per sample in first tar: {keys}')
-
-    # Heuristic: find the rgb key and depth key
-    rgb_key   = next((k for k in keys if k in ('jpg', 'jpeg', 'png')
-                      and 'depth' not in k), None)
-    depth_key = next((k for k in keys if 'depth' in k or k in ('npy',)), None)
-
-    # Fallback if naming is ambiguous — print and let user check
-    if rgb_key is None or depth_key is None:
-        print(f'  WARNING: could not auto-detect rgb/depth keys from {keys}')
-        print(f'  Assuming first image key = rgb, second = depth')
-        img_keys = [k for k in keys if k in
-                    ('jpg', 'jpeg', 'png', 'npy', 'npz')]
-        rgb_key   = img_keys[0] if len(img_keys) > 0 else keys[0]
-        depth_key = img_keys[1] if len(img_keys) > 1 else keys[1]
-
-    print(f'  rgb_key={rgb_key!r}, depth_key={depth_key!r}')
-
-    def read_split(tar_list):
+    def read_split(tar_list, split_name):
         samples = []
-        for tar_path in tqdm(tar_list, desc='  reading tars'):
+        for tar_path in tqdm(tar_list, desc=f'  {split_name}'):
             with tarfile.open(tar_path, 'r') as tf:
-                members = {m.name: m for m in tf.getmembers()}
-                # Group members by stem
-                stems = {}
-                for name in members:
-                    stem, ext = os.path.splitext(name)
-                    stems.setdefault(stem, {})[ext.lstrip('.')] = name
-
-                for stem, exts in stems.items():
-                    if rgb_key not in exts or depth_key not in exts:
+                for member in tf.getmembers():
+                    if not member.name.endswith('.h5'):
                         continue
-                    # Load RGB
-                    rgb_bytes = tf.extractfile(members[exts[rgb_key]]).read()
-                    rgb_img   = Image.open(io.BytesIO(rgb_bytes)).convert('RGB')
-                    # Load depth
-                    dep_bytes = tf.extractfile(members[exts[depth_key]]).read()
-                    if depth_key == 'npy':
-                        dep_arr = np.load(io.BytesIO(dep_bytes))
-                        dep_img = Image.fromarray(dep_arr.astype(np.float32))
-                    else:
-                        dep_img = Image.open(io.BytesIO(dep_bytes))
+                    raw = tf.extractfile(member).read()
+                    with h5py.File(io.BytesIO(raw), 'r') as f:
+                        rgb   = f['rgb'][:]    # (3, H, W) uint8
+                        depth = f['depth'][:]  # (H, W)   float32 metres
+                    # CHW → HWC for PIL
+                    rgb_img = Image.fromarray(rgb.transpose(1, 2, 0))
+                    # float32 depth → PIL mode 'F'
+                    dep_img = Image.fromarray(depth, mode='F')
                     samples.append({'image': rgb_img, 'depth_map': dep_img})
+        print(f'  {split_name}: {len(samples)} samples')
         return samples
 
-    print('  Loading train split ...')
-    train_samples = read_split(train_tars)
-    print(f'  train: {len(train_samples)} samples')
+    train_samples = read_split(train_tars, 'train')
+    val_samples   = read_split(val_tars,   'val')
 
-    print('  Loading val split ...')
-    val_samples = read_split(val_tars)
-    print(f'  val:   {len(val_samples)} samples')
-
-    # Wrap as a simple indexable object matching the expected interface
-    class SimpleDataset:
+    class _Split:
         def __init__(self, data): self._data = data
-        def __getitem__(self, key):
-            if isinstance(key, str):
-                return _SimpleSliceable(self._data, key)
-            return self._data[key]
         def __len__(self): return len(self._data)
-
-    class _SimpleSliceable:
-        """Enables dataset['train'][i:i+bs]['image'] access pattern."""
-        def __init__(self, data, split): self._data = data
         def __getitem__(self, idx):
             chunk = self._data[idx] if isinstance(idx, slice) else [self._data[idx]]
             return {'image':     [s['image']     for s in chunk],
                     'depth_map': [s['depth_map'] for s in chunk]}
-        def __len__(self): return len(self._data)
 
     class NYUDataset:
         def __init__(self, train, val):
-            self._train = _SimpleSliceable(train, 'train')
-            self._val   = _SimpleSliceable(val,   'val')
-        def __getitem__(self, key):
-            return self._train if key == 'train' else self._val
+            self._splits = {'train': _Split(train), 'validation': _Split(val)}
+        def __getitem__(self, key): return self._splits[key]
 
     return NYUDataset(train_samples, val_samples)
 

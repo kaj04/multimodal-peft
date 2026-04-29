@@ -268,36 +268,152 @@ def load_nyu_dataset(hf_cache: str):
             all_files.append(os.path.relpath(os.path.join(root, f), repo_dir))
     print(f'  Files in repo ({len(all_files)}): {all_files[:10]}')
 
+    # ── Detect format from file list ────────────────────────────────────
     parquet_files = glob.glob(os.path.join(repo_dir, '**', '*.parquet'),
                               recursive=True)
-    if not parquet_files:
+    tar_files = glob.glob(os.path.join(repo_dir, '**', '*.tar'),
+                          recursive=True)
+
+    if parquet_files:
+        # Parquet format (newer HF datasets)
+        train_files = sorted(f for f in parquet_files
+                             if 'train' in os.path.basename(f).lower())
+        val_files   = sorted(f for f in parquet_files
+                             if any(s in os.path.basename(f).lower()
+                                    for s in ('val', 'test')))
+        print(f'  Parquet — train: {len(train_files)}, val: {len(val_files)}')
+        ds = load_dataset('parquet', data_files={
+            'train': train_files, 'validation': val_files})
+        print(f'  {ds}')
+        return ds
+
+    elif tar_files:
+        # WebDataset format — peek inside first tar to find key names
+        return _load_nyu_webdataset(repo_dir, tar_files)
+
+    else:
         raise RuntimeError(
-            f'No parquet files found in {repo_dir}.\n'
-            f'All files: {all_files}\n'
-            'The dataset may use a format other than parquet. '
-            'Please check the HuggingFace repo structure.')
+            f'Unknown dataset format in {repo_dir}.\nAll files: {all_files}')
 
-    # Sort into train / validation by filename
-    train_files = sorted(f for f in parquet_files
-                         if 'train' in os.path.basename(f).lower())
-    val_files   = sorted(f for f in parquet_files
-                         if any(s in os.path.basename(f).lower()
-                                for s in ('val', 'test')))
 
-    if not train_files:
-        train_files = sorted(parquet_files)   # fallback: use all
-    if not val_files:
-        val_files = sorted(parquet_files)
+def _peek_tar_keys(tar_path: str) -> list:
+    """Return the file extensions (keys) of the first sample in a tar archive."""
+    import tarfile
+    keys = []
+    with tarfile.open(tar_path, 'r') as tf:
+        members = tf.getmembers()
+        if not members:
+            return keys
+        # Get the stem of the first file (e.g. '000000' from '000000.jpg')
+        first_stem = os.path.splitext(members[0].name)[0]
+        for m in members:
+            stem = os.path.splitext(m.name)[0]
+            if stem == first_stem:
+                keys.append(os.path.splitext(m.name)[1].lstrip('.'))
+            else:
+                break   # moved to next sample
+    return keys
 
-    print(f'  train parquet files: {[os.path.basename(f) for f in train_files]}')
-    print(f'  val   parquet files: {[os.path.basename(f) for f in val_files]}')
 
-    ds = load_dataset('parquet', data_files={
-        'train':      train_files,
-        'validation': val_files,
-    })
-    print(f'  {ds}')
-    return ds
+def _load_nyu_webdataset(repo_dir: str, tar_files: list) -> dict:
+    """Load NYUv2 WebDataset tars into a plain dict of lists.
+
+    Returns {'train': [{'image': PIL, 'depth_map': PIL}, ...],
+             'validation': [...]}
+    compatible with the rest of the pipeline.
+    """
+    import tarfile
+    import io
+
+    train_tars = sorted(f for f in tar_files
+                        if 'train' in os.path.basename(f).lower())
+    val_tars   = sorted(f for f in tar_files
+                        if any(s in os.path.basename(f).lower()
+                               for s in ('val', 'test')))
+
+    print(f'  WebDataset — train tars: {len(train_tars)}, val tars: {len(val_tars)}')
+
+    # Peek to discover key names
+    keys = _peek_tar_keys(train_tars[0])
+    print(f'  Keys per sample in first tar: {keys}')
+
+    # Heuristic: find the rgb key and depth key
+    rgb_key   = next((k for k in keys if k in ('jpg', 'jpeg', 'png')
+                      and 'depth' not in k), None)
+    depth_key = next((k for k in keys if 'depth' in k or k in ('npy',)), None)
+
+    # Fallback if naming is ambiguous — print and let user check
+    if rgb_key is None or depth_key is None:
+        print(f'  WARNING: could not auto-detect rgb/depth keys from {keys}')
+        print(f'  Assuming first image key = rgb, second = depth')
+        img_keys = [k for k in keys if k in
+                    ('jpg', 'jpeg', 'png', 'npy', 'npz')]
+        rgb_key   = img_keys[0] if len(img_keys) > 0 else keys[0]
+        depth_key = img_keys[1] if len(img_keys) > 1 else keys[1]
+
+    print(f'  rgb_key={rgb_key!r}, depth_key={depth_key!r}')
+
+    def read_split(tar_list):
+        samples = []
+        for tar_path in tqdm(tar_list, desc='  reading tars'):
+            with tarfile.open(tar_path, 'r') as tf:
+                members = {m.name: m for m in tf.getmembers()}
+                # Group members by stem
+                stems = {}
+                for name in members:
+                    stem, ext = os.path.splitext(name)
+                    stems.setdefault(stem, {})[ext.lstrip('.')] = name
+
+                for stem, exts in stems.items():
+                    if rgb_key not in exts or depth_key not in exts:
+                        continue
+                    # Load RGB
+                    rgb_bytes = tf.extractfile(members[exts[rgb_key]]).read()
+                    rgb_img   = Image.open(io.BytesIO(rgb_bytes)).convert('RGB')
+                    # Load depth
+                    dep_bytes = tf.extractfile(members[exts[depth_key]]).read()
+                    if depth_key == 'npy':
+                        dep_arr = np.load(io.BytesIO(dep_bytes))
+                        dep_img = Image.fromarray(dep_arr.astype(np.float32))
+                    else:
+                        dep_img = Image.open(io.BytesIO(dep_bytes))
+                    samples.append({'image': rgb_img, 'depth_map': dep_img})
+        return samples
+
+    print('  Loading train split ...')
+    train_samples = read_split(train_tars)
+    print(f'  train: {len(train_samples)} samples')
+
+    print('  Loading val split ...')
+    val_samples = read_split(val_tars)
+    print(f'  val:   {len(val_samples)} samples')
+
+    # Wrap as a simple indexable object matching the expected interface
+    class SimpleDataset:
+        def __init__(self, data): self._data = data
+        def __getitem__(self, key):
+            if isinstance(key, str):
+                return _SimpleSliceable(self._data, key)
+            return self._data[key]
+        def __len__(self): return len(self._data)
+
+    class _SimpleSliceable:
+        """Enables dataset['train'][i:i+bs]['image'] access pattern."""
+        def __init__(self, data, split): self._data = data
+        def __getitem__(self, idx):
+            chunk = self._data[idx] if isinstance(idx, slice) else [self._data[idx]]
+            return {'image':     [s['image']     for s in chunk],
+                    'depth_map': [s['depth_map'] for s in chunk]}
+        def __len__(self): return len(self._data)
+
+    class NYUDataset:
+        def __init__(self, train, val):
+            self._train = _SimpleSliceable(train, 'train')
+            self._val   = _SimpleSliceable(val,   'val')
+        def __getitem__(self, key):
+            return self._train if key == 'train' else self._val
+
+    return NYUDataset(train_samples, val_samples)
 
 
 # ---------------------------------------------------------------------------

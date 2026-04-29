@@ -240,7 +240,11 @@ def main():
     print('\n=== Step 2: Load NYUv2 dataset ===')
     from datasets import load_dataset
     print('  Fetching sayakpaul/nyu_depth_v2 ...')
-    dataset = load_dataset('sayakpaul/nyu_depth_v2', cache_dir=args.hf_cache)
+    dataset = load_dataset(
+        'sayakpaul/nyu_depth_v2',
+        cache_dir=args.hf_cache,
+        trust_remote_code=True,   # required by datasets>=2.x for custom loading scripts
+    )
     print(f'  {dataset}')
 
     # ── 3. Tokenize ────────────────────────────────────────────────────────

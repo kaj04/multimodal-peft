@@ -38,7 +38,12 @@ pip install torch==2.1.2 torchvision==0.16.2 \
     --index-url https://download.pytorch.org/whl/cu121
 
 # ---------------------------------------------------------------------------
-# 4. Install the fourm package from the submodule
+# 4. Extra dependencies not pulled in by ml-4m
+# ---------------------------------------------------------------------------
+pip install h5py pyyaml>=6.0
+
+# ---------------------------------------------------------------------------
+# 5. Install the fourm package from the submodule
 # ---------------------------------------------------------------------------
 echo "Installing fourm package from ml-4m submodule..."
 pip install -e "$REPO_ROOT/ml-4m"

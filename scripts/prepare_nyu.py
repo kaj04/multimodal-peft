@@ -221,6 +221,86 @@ def tokenize_split(
 
 
 # ---------------------------------------------------------------------------
+# NYUv2 dataset loading — robust to datasets library version
+# ---------------------------------------------------------------------------
+
+def load_nyu_dataset(hf_cache: str):
+    """Load NYUv2 from HuggingFace, bypassing the datasets loading-script issue.
+
+    datasets>=4.0 removed support for custom loading scripts (.py files).
+    sayakpaul/nyu_depth_v2 uses one, so we bypass the datasets library:
+      1. Download the raw repo files via huggingface_hub.snapshot_download
+         (this ignores .py scripts — only gets data files)
+      2. Find the parquet files in the downloaded snapshot
+      3. Load them directly with datasets.load_dataset('parquet', ...)
+
+    Falls back to direct load_dataset() call (works on datasets<4.0).
+    """
+    from datasets import load_dataset
+
+    # ── Fast path: datasets<4.0 with trust_remote_code (works on 2.x) ──
+    try:
+        ds = load_dataset('sayakpaul/nyu_depth_v2',
+                          cache_dir=hf_cache,
+                          trust_remote_code=True)
+        print(f'  {ds}')
+        return ds
+    except Exception:
+        pass  # datasets>=4.0 — fall through to snapshot approach
+
+    # ── Robust path: snapshot_download → load parquet directly ──────────
+    print('  datasets>=4.0 detected — using snapshot_download fallback ...')
+    from huggingface_hub import snapshot_download
+    import glob
+
+    repo_dir = snapshot_download(
+        repo_id='sayakpaul/nyu_depth_v2',
+        repo_type='dataset',
+        cache_dir=hf_cache,
+        ignore_patterns=['*.py'],   # skip the loading script
+    )
+    print(f'  Snapshot at: {repo_dir}')
+
+    # List everything so we can debug if parquet not found
+    all_files = []
+    for root, _, files in os.walk(repo_dir):
+        for f in files:
+            all_files.append(os.path.relpath(os.path.join(root, f), repo_dir))
+    print(f'  Files in repo ({len(all_files)}): {all_files[:10]}')
+
+    parquet_files = glob.glob(os.path.join(repo_dir, '**', '*.parquet'),
+                              recursive=True)
+    if not parquet_files:
+        raise RuntimeError(
+            f'No parquet files found in {repo_dir}.\n'
+            f'All files: {all_files}\n'
+            'The dataset may use a format other than parquet. '
+            'Please check the HuggingFace repo structure.')
+
+    # Sort into train / validation by filename
+    train_files = sorted(f for f in parquet_files
+                         if 'train' in os.path.basename(f).lower())
+    val_files   = sorted(f for f in parquet_files
+                         if any(s in os.path.basename(f).lower()
+                                for s in ('val', 'test')))
+
+    if not train_files:
+        train_files = sorted(parquet_files)   # fallback: use all
+    if not val_files:
+        val_files = sorted(parquet_files)
+
+    print(f'  train parquet files: {[os.path.basename(f) for f in train_files]}')
+    print(f'  val   parquet files: {[os.path.basename(f) for f in val_files]}')
+
+    ds = load_dataset('parquet', data_files={
+        'train':      train_files,
+        'validation': val_files,
+    })
+    print(f'  {ds}')
+    return ds
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -238,14 +318,7 @@ def main():
 
     # ── 2. Download NYUv2 ──────────────────────────────────────────────────
     print('\n=== Step 2: Load NYUv2 dataset ===')
-    from datasets import load_dataset
-    print('  Fetching sayakpaul/nyu_depth_v2 ...')
-    dataset = load_dataset(
-        'sayakpaul/nyu_depth_v2',
-        cache_dir=args.hf_cache,
-        trust_remote_code=True,   # required by datasets>=2.x for custom loading scripts
-    )
-    print(f'  {dataset}')
+    dataset = load_nyu_dataset(args.hf_cache)
 
     # ── 3. Tokenize ────────────────────────────────────────────────────────
     print('\n=== Step 3: Tokenize ===')

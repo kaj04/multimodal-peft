@@ -44,21 +44,18 @@ echo ""
 # Dry-run first (8 images) to validate the pipeline before full tokenization
 echo "--- Dry run (8 images) ---"
 python scripts/prepare_nyu.py \
-    --output_dir   /scratch-shared/tesr125338/nyu_tokens_dryrun \
-    --tokenizers_dir /scratch-shared/tesr125338/tokenizer_ckpts \
-    --hf_cache     "$HF_HOME" \
-    --batch_size   8 \
+    --output_dir /scratch-shared/tesr125338/nyu_tokens_dryrun \
+    --hf_cache   "$HF_HOME" \
+    --batch_size 8 \
     --dry_run
 
 echo ""
 echo "--- Dry run passed. Running full tokenization (795 + 654 images) ---"
 
 python scripts/prepare_nyu.py \
-    --output_dir   /scratch-shared/tesr125338/nyu_tokens \
-    --tokenizers_dir /scratch-shared/tesr125338/tokenizer_ckpts \
-    --hf_cache     "$HF_HOME" \
-    --batch_size   32 \
-    --num_workers  8
+    --output_dir /scratch-shared/tesr125338/nyu_tokens \
+    --hf_cache   "$HF_HOME" \
+    --batch_size 32
 
 echo ""
 echo "=== Tokenization complete ==="

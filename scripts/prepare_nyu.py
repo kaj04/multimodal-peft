@@ -46,6 +46,7 @@
 # -----------------------------------------------------------------------
 
 import argparse
+import io
 import os
 import sys
 from pathlib import Path
@@ -168,7 +169,119 @@ def preprocess_depth_batch(pil_images, size: int = 224) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
-# Tokenize one split
+# Tokenize a split from HDF5/WebDataset tars — STREAMING (no OOM)
+# ---------------------------------------------------------------------------
+
+def _iter_h5_samples(tar_path: str):
+    """Generator: yield (rgb_pil, depth_pil) for every .h5 in a tar archive.
+
+    Memory stays bounded: one sample at a time is in RAM. The generator is
+    exhausted sample-by-sample, so the tarfile stays open only for the
+    duration of one tar.
+    """
+    import tarfile, h5py
+
+    with tarfile.open(tar_path, 'r') as tf:
+        members = [m for m in tf.getmembers() if m.name.endswith('.h5')]
+        members.sort(key=lambda m: m.name)   # deterministic order
+        for member in members:
+            raw = tf.extractfile(member).read()
+            with h5py.File(io.BytesIO(raw), 'r') as f:
+                rgb   = f['rgb'][:]    # (3, H, W) uint8
+                depth = f['depth'][:]  # (H, W)   float32 metres
+            rgb_img = Image.fromarray(rgb.transpose(1, 2, 0))
+            dep_img = Image.fromarray(depth, mode='F')
+            yield rgb_img, dep_img
+
+
+def tokenize_split_from_tars(
+        split_name: str,
+        tar_list: list,
+        rgb_tok,
+        depth_tok,
+        output_dir: str,
+        batch_size: int,
+        device: torch.device,
+        dry_run: bool = False,
+):
+    """Stream-tokenize one dataset split from a list of .tar files.
+
+    Memory footprint:
+      - GPU: one batch of tokenizer activations at a time
+      - CPU: at most `batch_size` PIL images at a time
+      - Disk: .npy written immediately after each batch
+
+    Never loads the full split into RAM.
+    """
+    rgb_out   = Path(output_dir) / split_name / 'tok_rgb'
+    depth_out = Path(output_dir) / split_name / 'tok_depth'
+    rgb_out.mkdir(parents=True, exist_ok=True)
+    depth_out.mkdir(parents=True, exist_ok=True)
+
+    max_samples = 8 if dry_run else None   # None = unlimited
+    global_idx  = 0                        # .npy file counter
+    rgb_buf, dep_buf = [], []              # accumulate one batch
+
+    def flush_batch(rgb_list, dep_list, start_idx):
+        """Tokenize a full batch and save .npy files. Frees GPU memory."""
+        rgb_t = preprocess_rgb_batch(rgb_list).to(device)
+        dep_t = preprocess_depth_batch(dep_list).to(device)
+
+        with torch.no_grad():
+            rgb_tok_out = rgb_tok.tokenize(rgb_t)
+            rgb_tok_out = rgb_tok_out.view(rgb_tok_out.shape[0], -1)   # (B, 196)
+            dep_tok_out = depth_tok.tokenize(dep_t)
+            dep_tok_out = dep_tok_out.view(dep_tok_out.shape[0], -1)
+
+        rgb_np = rgb_tok_out.cpu().numpy().astype(np.int16)
+        dep_np = dep_tok_out.cpu().numpy().astype(np.int16)
+
+        for j in range(len(rgb_list)):
+            name = f'{start_idx + j:05d}'
+            np.save(rgb_out   / f'{name}.npy', rgb_np[j])
+            np.save(depth_out / f'{name}.npy', dep_np[j])
+
+        # Explicitly free GPU tensors
+        del rgb_t, dep_t, rgb_tok_out, dep_tok_out
+        torch.cuda.empty_cache()
+
+    n_tars = len(tar_list)
+    print(f'\n[{split_name}] {n_tars} tars{" (DRY RUN — max 8 samples)" if dry_run else ""}')
+
+    done = False
+    for tar_idx, tar_path in enumerate(tqdm(tar_list, desc=f'  {split_name} tars')):
+        if done:
+            break
+        for rgb_img, dep_img in _iter_h5_samples(tar_path):
+            rgb_buf.append(rgb_img)
+            dep_buf.append(dep_img)
+
+            if len(rgb_buf) == batch_size:
+                flush_batch(rgb_buf, dep_buf, global_idx)
+                global_idx += len(rgb_buf)
+                rgb_buf, dep_buf = [], []
+
+            if max_samples is not None and global_idx + len(rgb_buf) >= max_samples:
+                done = True
+                break   # stop reading this tar
+
+    # Flush any remaining partial batch
+    if rgb_buf:
+        if max_samples is not None:
+            keep = max_samples - global_idx
+            rgb_buf, dep_buf = rgb_buf[:keep], dep_buf[:keep]
+        if rgb_buf:
+            flush_batch(rgb_buf, dep_buf, global_idx)
+            global_idx += len(rgb_buf)
+
+    print(f'  Saved {global_idx} samples')
+    print(f'  tok_rgb   → {rgb_out}')
+    print(f'  tok_depth → {depth_out}')
+    return global_idx
+
+
+# ---------------------------------------------------------------------------
+# Tokenize one split — parquet / HuggingFace datasets path (legacy)
 # ---------------------------------------------------------------------------
 
 def tokenize_split(
@@ -221,61 +334,55 @@ def tokenize_split(
 
 
 # ---------------------------------------------------------------------------
-# NYUv2 dataset loading — robust to datasets library version
+# NYUv2 dataset discovery — returns tar paths OR HF dataset
 # ---------------------------------------------------------------------------
 
-def load_nyu_dataset(hf_cache: str):
-    """Load NYUv2 from HuggingFace, bypassing the datasets loading-script issue.
+def get_nyu_data_source(hf_cache: str):
+    """Locate or download NYUv2 and return a data source descriptor.
 
-    datasets>=4.0 removed support for custom loading scripts (.py files).
-    sayakpaul/nyu_depth_v2 uses one, so we bypass the datasets library:
-      1. Download the raw repo files via huggingface_hub.snapshot_download
-         (this ignores .py scripts — only gets data files)
-      2. Find the parquet files in the downloaded snapshot
-      3. Load them directly with datasets.load_dataset('parquet', ...)
+    Returns one of:
+      {'format': 'tars',  'train': [path,...], 'val': [path,...]}
+      {'format': 'hf',    'dataset': <HF DatasetDict>}
 
-    Falls back to direct load_dataset() call (works on datasets<4.0).
+    The tar format (WebDataset) is the actual storage format used by
+    sayakpaul/nyu_depth_v2 on HuggingFace Hub.
     """
-    from datasets import load_dataset
+    import glob
+    from huggingface_hub import snapshot_download
 
-    # ── Fast path: datasets<4.0 with trust_remote_code (works on 2.x) ──
+    # ── Try direct HF load first (works on datasets<4.0) ────────────────
     try:
+        from datasets import load_dataset
         ds = load_dataset('sayakpaul/nyu_depth_v2',
                           cache_dir=hf_cache,
                           trust_remote_code=True)
-        print(f'  {ds}')
-        return ds
+        print(f'  HF dataset loaded directly: {ds}')
+        return {'format': 'hf', 'dataset': ds}
     except Exception:
-        pass  # datasets>=4.0 — fall through to snapshot approach
+        pass
 
-    # ── Robust path: snapshot_download → load parquet directly ──────────
-    print('  datasets>=4.0 detected — using snapshot_download fallback ...')
-    from huggingface_hub import snapshot_download
-    import glob
-
+    # ── Robust path: snapshot_download ──────────────────────────────────
+    print('  datasets>=4.0 detected — using snapshot_download ...')
     repo_dir = snapshot_download(
         repo_id='sayakpaul/nyu_depth_v2',
         repo_type='dataset',
         cache_dir=hf_cache,
-        ignore_patterns=['*.py'],   # skip the loading script
+        ignore_patterns=['*.py'],
     )
     print(f'  Snapshot at: {repo_dir}')
 
-    # List everything so we can debug if parquet not found
+    # Debug: list files
     all_files = []
     for root, _, files in os.walk(repo_dir):
         for f in files:
             all_files.append(os.path.relpath(os.path.join(root, f), repo_dir))
-    print(f'  Files in repo ({len(all_files)}): {all_files[:10]}')
+    print(f'  Files in repo ({len(all_files)} total): {all_files[:15]}')
 
-    # ── Detect format from file list ────────────────────────────────────
-    parquet_files = glob.glob(os.path.join(repo_dir, '**', '*.parquet'),
-                              recursive=True)
-    tar_files = glob.glob(os.path.join(repo_dir, '**', '*.tar'),
-                          recursive=True)
+    parquet_files = glob.glob(os.path.join(repo_dir, '**', '*.parquet'), recursive=True)
+    tar_files     = glob.glob(os.path.join(repo_dir, '**', '*.tar'),     recursive=True)
 
     if parquet_files:
-        # Parquet format (newer HF datasets)
+        from datasets import load_dataset
         train_files = sorted(f for f in parquet_files
                              if 'train' in os.path.basename(f).lower())
         val_files   = sorted(f for f in parquet_files
@@ -285,70 +392,20 @@ def load_nyu_dataset(hf_cache: str):
         ds = load_dataset('parquet', data_files={
             'train': train_files, 'validation': val_files})
         print(f'  {ds}')
-        return ds
+        return {'format': 'hf', 'dataset': ds}
 
     elif tar_files:
-        # WebDataset format — peek inside first tar to find key names
-        return _load_nyu_webdataset(repo_dir, tar_files)
+        train_tars = sorted(f for f in tar_files
+                            if 'train' in os.path.basename(f).lower())
+        val_tars   = sorted(f for f in tar_files
+                            if any(s in os.path.basename(f).lower()
+                                   for s in ('val', 'test')))
+        print(f'  WebDataset/HDF5 — train: {len(train_tars)} tars, val: {len(val_tars)} tars')
+        return {'format': 'tars', 'train': train_tars, 'val': val_tars}
 
     else:
         raise RuntimeError(
             f'Unknown dataset format in {repo_dir}.\nAll files: {all_files}')
-
-
-def _load_nyu_webdataset(repo_dir: str, tar_files: list) -> dict:
-    """Load NYUv2 WebDataset tars — each .h5 contains rgb + depth.
-
-    HDF5 structure discovered from sayakpaul/nyu_depth_v2:
-      rgb:   (3, 480, 640) uint8   channels-first
-      depth: (480, 640)   float32  metric depth in metres
-    """
-    import tarfile, io, h5py
-
-    train_tars = sorted(f for f in tar_files
-                        if 'train' in os.path.basename(f).lower())
-    val_tars   = sorted(f for f in tar_files
-                        if any(s in os.path.basename(f).lower()
-                               for s in ('val', 'test')))
-
-    print(f'  HDF5/WebDataset — train: {len(train_tars)} tars, val: {len(val_tars)} tars')
-
-    def read_split(tar_list, split_name):
-        samples = []
-        for tar_path in tqdm(tar_list, desc=f'  {split_name}'):
-            with tarfile.open(tar_path, 'r') as tf:
-                for member in tf.getmembers():
-                    if not member.name.endswith('.h5'):
-                        continue
-                    raw = tf.extractfile(member).read()
-                    with h5py.File(io.BytesIO(raw), 'r') as f:
-                        rgb   = f['rgb'][:]    # (3, H, W) uint8
-                        depth = f['depth'][:]  # (H, W)   float32 metres
-                    # CHW → HWC for PIL
-                    rgb_img = Image.fromarray(rgb.transpose(1, 2, 0))
-                    # float32 depth → PIL mode 'F'
-                    dep_img = Image.fromarray(depth, mode='F')
-                    samples.append({'image': rgb_img, 'depth_map': dep_img})
-        print(f'  {split_name}: {len(samples)} samples')
-        return samples
-
-    train_samples = read_split(train_tars, 'train')
-    val_samples   = read_split(val_tars,   'val')
-
-    class _Split:
-        def __init__(self, data): self._data = data
-        def __len__(self): return len(self._data)
-        def __getitem__(self, idx):
-            chunk = self._data[idx] if isinstance(idx, slice) else [self._data[idx]]
-            return {'image':     [s['image']     for s in chunk],
-                    'depth_map': [s['depth_map'] for s in chunk]}
-
-    class NYUDataset:
-        def __init__(self, train, val):
-            self._splits = {'train': _Split(train), 'validation': _Split(val)}
-        def __getitem__(self, key): return self._splits[key]
-
-    return NYUDataset(train_samples, val_samples)
 
 
 # ---------------------------------------------------------------------------
@@ -367,30 +424,46 @@ def main():
     rgb_tok   = load_tokenizer(RGB_TOKENIZER_REPO,   args.hf_cache, str(device))
     depth_tok = load_tokenizer(DEPTH_TOKENIZER_REPO, args.hf_cache, str(device))
 
-    # ── 2. Download NYUv2 ──────────────────────────────────────────────────
-    print('\n=== Step 2: Load NYUv2 dataset ===')
-    dataset = load_nyu_dataset(args.hf_cache)
+    # ── 2. Locate NYUv2 ───────────────────────────────────────────────────
+    print('\n=== Step 2: Locate NYUv2 dataset ===')
+    source = get_nyu_data_source(args.hf_cache)
 
     # ── 3. Tokenize ────────────────────────────────────────────────────────
     print('\n=== Step 3: Tokenize ===')
-    split_map = {'train': 'train', 'val': 'validation'}
-    if args.splits == 'train':
-        split_map = {'train': 'train'}
-    elif args.splits == 'val':
-        split_map = {'val': 'validation'}
 
-    for out_name, hf_key in split_map.items():
-        tokenize_split(
-            split_name=out_name,
-            hf_split_key=hf_key,
-            dataset=dataset,
-            rgb_tok=rgb_tok,
-            depth_tok=depth_tok,
-            output_dir=args.output_dir,
-            batch_size=args.batch_size,
-            device=device,
-            dry_run=args.dry_run,
-        )
+    split_names = []
+    if args.splits in ('train', 'both'):
+        split_names.append('train')
+    if args.splits in ('val', 'both'):
+        split_names.append('val')
+
+    for split_name in split_names:
+        if source['format'] == 'tars':
+            hf_key = 'val' if split_name == 'val' else 'train'
+            tokenize_split_from_tars(
+                split_name=split_name,
+                tar_list=source[hf_key],
+                rgb_tok=rgb_tok,
+                depth_tok=depth_tok,
+                output_dir=args.output_dir,
+                batch_size=args.batch_size,
+                device=device,
+                dry_run=args.dry_run,
+            )
+        else:
+            # HF DatasetDict path (parquet or datasets<4.0)
+            hf_key = 'validation' if split_name == 'val' else 'train'
+            tokenize_split(
+                split_name=split_name,
+                hf_split_key=hf_key,
+                dataset=source['dataset'],
+                rgb_tok=rgb_tok,
+                depth_tok=depth_tok,
+                output_dir=args.output_dir,
+                batch_size=args.batch_size,
+                device=device,
+                dry_run=args.dry_run,
+            )
 
     print('\n=== Done ===')
     print(f'Tokens saved to: {args.output_dir}')

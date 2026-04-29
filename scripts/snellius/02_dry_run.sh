@@ -33,7 +33,17 @@ mkdir -p logs
 
 cd "$REPO_ROOT"
 
-echo "=== Dry run: 4M-21_XL + LoRA (rank=8, attention) ==="
+echo "=== Dry run 1/2: 4M-21_B (smallest, ~198M params — fastest to validate) ==="
+python run_finetuning_lora.py \
+    --dry_run \
+    --pretrained_model EPFL-VILAB/4M-21_B \
+    --lora_rank 8 \
+    --lora_modules attention \
+    --task semseg \
+    --dtype bfloat16
+
+echo ""
+echo "=== Dry run 2/2: 4M-21_XL (~2.8B params — paper baseline model) ==="
 python run_finetuning_lora.py \
     --dry_run \
     --pretrained_model EPFL-VILAB/4M-21_XL \
@@ -43,16 +53,8 @@ python run_finetuning_lora.py \
     --dtype bfloat16
 
 echo ""
-echo "=== Dry run: 4M-21_B (small model, faster to load) ==="
-python run_finetuning_lora.py \
-    --dry_run \
-    --pretrained_model EPFL-VILAB/4M-21_B \
-    --lora_rank 64 \
-    --lora_modules attention \
-    --task semseg \
-    --dtype bfloat16
-
 echo "Dry run complete. Check logs above for:"
 echo "  - Total params / Trainable (LoRA) params / %"
 echo "  - Loss value after forward pass"
 echo "  - 'OK — gradients flow only through LoRA parameters'"
+echo "  - Peak GPU memory (MiB)"

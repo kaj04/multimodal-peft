@@ -492,6 +492,8 @@ def evaluate(
 def dry_run(model: nn.Module, args, device: torch.device):
     """Run a single synthetic forward+backward pass to validate the setup."""
     print('\n--- DRY RUN: validating LoRA setup with synthetic data ---')
+    if device.type == 'cuda':
+        torch.cuda.reset_peak_memory_stats(device)
     model.train()
     B = 2
 
@@ -529,6 +531,12 @@ def dry_run(model: nn.Module, args, device: torch.device):
         print(f'  WARNING: unexpected gradients in: {non_lora_grads[:5]}')
     else:
         print('  OK — gradients flow only through LoRA parameters.')
+
+    if device.type == 'cuda':
+        peak_mem_mib = torch.cuda.max_memory_allocated(device) / 1024**2
+        reserved_mib = torch.cuda.max_memory_reserved(device) / 1024**2
+        print(f'  Peak GPU memory allocated: {peak_mem_mib:.0f} MiB')
+        print(f'  Peak GPU memory reserved:  {reserved_mib:.0f} MiB')
 
     print('--- DRY RUN COMPLETE ---\n')
 

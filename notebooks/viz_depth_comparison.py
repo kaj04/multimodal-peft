@@ -1,21 +1,21 @@
 # %% [markdown]
-# # 4M-21 Depth Estimation: Baseline vs LoRA Visual Comparison
+# # 4M-21 Depth Estimation: Baseline vs LoRA Comparison
 #
-# Shows 5 validation samples as a 5×4 grid:
-#   Col 1 – Original RGB (decoded from VQ-VAE RGB tokens)
-#   Col 2 – Ground-truth depth (decoded from saved tok_depth tokens)
-#   Col 3 – 4M-21 baseline prediction (LoRA injected but weights = 0)
-#   Col 4 – 4M-21 + LoRA fine-tuned prediction
+# Visualises 5 validation samples as a 5×4 grid:
+#   Col 1 – Original RGB (from NYUv2 HF dataset)
+#   Col 2 – Ground-truth depth (from NYUv2 HF dataset, magma colormap)
+#   Col 3 – Baseline token correctness map (4M-21 zero-shot, no LoRA)
+#   Col 4 – LoRA token correctness map (4M-21 + fine-tuned LoRA)
 #
-# Run on Snellius (single GPU node is enough):
-#   cd ~/4m-peft
-#   conda activate 4m-peft
+# Correctness maps: each cell in the 14×14 grid is GREEN if the model
+# predicted the correct depth token, RED otherwise.
+# Overall accuracy is shown as a % above each column.
+#
+# Run on Snellius (single GPU node):
 #   python notebooks/viz_depth_comparison.py
-#
-# Output saved to: figures/depth_comparison.png
-# (also displayed inline when running as a Jupyter notebook)
+# Output: figures/depth_comparison.png
 
-# %% ─── Cell 1: paths & imports ────────────────────────────────────────────
+# %% --- Cell 1: imports & paths ----------------------------------------------
 import sys
 import os
 from pathlib import Path
@@ -23,58 +23,46 @@ from pathlib import Path
 import numpy as np
 import torch
 import matplotlib
-matplotlib.use('Agg')          # headless on Snellius; change to 'TkAgg' locally
+matplotlib.use('Agg')   # headless on Snellius; use 'TkAgg' if running locally
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+import matplotlib.patches as mpatches
 
-# ── repo root ──────────────────────────────────────────────────────────────
+# --- repo root ----------------------------------------------------------------
 REPO_ROOT = Path.home() / '4m-peft'
 sys.path.insert(0, str(REPO_ROOT / 'ml-4m'))
 
-# ── paths ──────────────────────────────────────────────────────────────────
-HF_CACHE      = '/scratch-shared/tesr125338/hf_cache'
-NYU_VAL       = '/scratch-shared/tesr125338/nyu_tokens/val'
-LORA_CKPT     = str(REPO_ROOT / 'output/depth/nyu_rgb_r8_e5/lora_weights-best.pth')
-FIGURES_DIR   = REPO_ROOT / 'figures'
+# --- paths -------------------------------------------------------------------
+HF_CACHE     = '/scratch-shared/tesr125338/hf_cache'
+NYU_VAL      = '/scratch-shared/tesr125338/nyu_tokens/val'
+LORA_CKPT    = str(REPO_ROOT / 'output/depth/nyu_rgb_r8_e5/lora_weights-best.pth')
+FIGURES_DIR  = REPO_ROOT / 'figures'
 FIGURES_DIR.mkdir(exist_ok=True)
 
-NUM_SAMPLES   = 5          # how many val images to visualize
-LORA_RANK     = 8
-LORA_SCALE    = 1.0
-PRETRAINED    = 'EPFL-VILAB/4M-21_XL'
-RGB_TOK_REPO  = 'EPFL-VILAB/4M_tokenizers_rgb_16k_224-448'
-DEPTH_TOK_REPO= 'EPFL-VILAB/4M_tokenizers_depth_8k_224-448'
+NUM_SAMPLES  = 5
+LORA_RANK    = 8
+LORA_SCALE   = 1.0
+PRETRAINED   = 'EPFL-VILAB/4M-21_XL'
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-DTYPE  = torch.bfloat16     # matches training precision
+DTYPE  = torch.bfloat16
 
 print(f'Device : {DEVICE}')
-print(f'LoRA checkpoint : {LORA_CKPT}')
 assert Path(LORA_CKPT).exists(), (
-    f'\n[!] LoRA checkpoint not found: {LORA_CKPT}\n'
-    f'    Run the 5-epoch validation job first:\n'
-    f'    sbatch scripts/snellius/05_ft_depth_nyu_val5.sh'
+    f'\nLoRA checkpoint not found: {LORA_CKPT}\n'
+    f'Run the 5-epoch validation job first:\n'
+    f'  sbatch scripts/snellius/05_ft_depth_nyu_val5.sh'
 )
+print(f'LoRA checkpoint : {LORA_CKPT}')
 
-# %% ─── Cell 2: load VQ-VAE tokenizers ────────────────────────────────────
-from fourm.vq.vqvae import VQ
-
-print('Loading RGB tokenizer …')
-rgb_tok = VQ.from_pretrained(RGB_TOK_REPO, cache_dir=HF_CACHE).eval().to(DEVICE)
-print('Loading Depth tokenizer …')
-depth_tok = VQ.from_pretrained(DEPTH_TOK_REPO, cache_dir=HF_CACHE).eval().to(DEVICE)
-print('Tokenizers ready.\n')
-
-# %% ─── Cell 3: load 5 pre-tokenized val samples ──────────────────────────
+# %% --- Cell 2: load 5 pre-tokenised val samples ----------------------------
 val_root  = Path(NYU_VAL)
 rgb_dir   = val_root / 'tok_rgb'
 depth_dir = val_root / 'tok_depth'
 
-# Collect stems common to both folders, take first NUM_SAMPLES
 rgb_stems   = sorted(p.stem for p in rgb_dir.glob('**/*.npy'))
 depth_stems = sorted(p.stem for p in depth_dir.glob('**/*.npy'))
 common = sorted(set(rgb_stems) & set(depth_stems))[:NUM_SAMPLES]
-print(f'Selected {len(common)} samples: {common}\n')
+print(f'Selected {len(common)} samples: {common}')
 
 def _load_npy(folder: Path, stem: str) -> np.ndarray:
     matches = list(folder.rglob(f'{stem}.npy'))
@@ -86,199 +74,213 @@ rgb_tokens   = torch.from_numpy(
 depth_tokens = torch.from_numpy(
     np.stack([_load_npy(depth_dir, s) for s in common])).to(DEVICE)   # (N, 196)
 
-print(f'RGB tokens shape   : {rgb_tokens.shape}')
-print(f'Depth tokens shape : {depth_tokens.shape}')
+print(f'RGB tokens   : {rgb_tokens.shape}')
+print(f'Depth tokens : {depth_tokens.shape}')
 
-# %% ─── Cell 4: decode ground-truth images for display ────────────────────
+# %% --- Cell 3: load original RGB and depth images from HF dataset ----------
+from datasets import load_dataset
+from PIL import Image
 
-@torch.no_grad()
-def decode_tokens(vqvae: VQ, tokens_flat: torch.Tensor) -> torch.Tensor:
-    """Decode flat (B, 196) tokens → pixel tensor (B, C, H, W).
+print('Loading HF dataset from local cache (no internet needed)...')
+ds_val = load_dataset('sayakpaul/nyu_depth_v2',
+                      cache_dir=HF_CACHE,
+                      split='validation')
+print(f'Validation split: {len(ds_val)} samples')
 
-    VQ.decode_tokens expects shape (B, H_Q, W_Q) = (B, 14, 14).
-    """
-    B = tokens_flat.shape[0]
-    tokens_2d = tokens_flat.reshape(B, 14, 14).long()
-    return vqvae.decode_tokens(tokens_2d)   # (B, C, H, W)
+# .npy stems are zero-padded indices → direct dataset indices
+sample_indices = [int(s) for s in common]
+print(f'Loading indices: {sample_indices}')
 
+SIZE = 224  # match tokenisation resolution (14×14 patches × 16px = 224)
 
-with torch.no_grad():
-    rgb_pixels   = decode_tokens(rgb_tok,   rgb_tokens)    # (N, 3, H, W) ~ [-1, 1]
-    gt_depth_pix = decode_tokens(depth_tok, depth_tokens)  # (N, 1, H, W)
+rgb_imgs   = []
+depth_imgs = []
+for idx in sample_indices:
+    sample = ds_val[idx]
+    rgb_imgs.append(
+        np.array(sample['image'].convert('RGB').resize((SIZE, SIZE), Image.BILINEAR),
+                 dtype=np.uint8))                                         # (H, W, 3)
+    depth_np = np.array(sample['depth_map'], dtype=np.float32)           # metres
+    depth_np = np.array(
+        Image.fromarray(depth_np).resize((SIZE, SIZE), Image.NEAREST))
+    depth_imgs.append(depth_np)                                          # (H, W)
 
-print(f'RGB decoded  : {rgb_pixels.shape}   range [{rgb_pixels.min():.2f}, {rgb_pixels.max():.2f}]')
-print(f'GT depth dec : {gt_depth_pix.shape}  range [{gt_depth_pix.min():.2f}, {gt_depth_pix.max():.2f}]')
+print(f'Loaded {len(rgb_imgs)} RGB images and {len(depth_imgs)} depth maps.')
 
-# %% ─── Cell 5: helpers for building 4M mod_dict ──────────────────────────
+# %% --- Cell 4: mod_dict helper ---------------------------------------------
 
 def build_mod_dict(input_tokens, target_tokens,
                    input_mod='tok_rgb@224', target_mod='tok_depth@224',
                    num_input=196, num_target=196):
-    """Build a mod_dict for 4M single-input→single-target forward pass.
+    """Build a mod_dict for a single-input → single-target 4M forward pass.
 
-    input_tokens  : (B, num_input)  long  — fully visible to encoder
+    input_tokens  : (B, num_input)  long  — fully visible to the encoder
     target_tokens : (B, num_target) long  — fully hidden; all predicted
     """
     B, device = input_tokens.shape[0], input_tokens.device
     return {
         input_mod: {
             'tensor'                : input_tokens,
-            'input_mask'            : torch.zeros( (B, num_input),  dtype=torch.bool, device=device),
-            'target_mask'           : torch.ones(  (B, num_input),  dtype=torch.bool, device=device),
-            'decoder_attention_mask': torch.zeros( (B, num_input),  dtype=torch.int,  device=device),
+            'input_mask'            : torch.zeros((B, num_input),  dtype=torch.bool, device=device),
+            'target_mask'           : torch.ones( (B, num_input),  dtype=torch.bool, device=device),
+            'decoder_attention_mask': torch.zeros((B, num_input),  dtype=torch.int,  device=device),
         },
         target_mod: {
             'tensor'                : target_tokens,
-            'input_mask'            : torch.ones(  (B, num_target), dtype=torch.bool, device=device),
-            'target_mask'           : torch.zeros( (B, num_target), dtype=torch.bool, device=device),
-            'decoder_attention_mask': torch.ones(  (B, num_target), dtype=torch.int,  device=device),
+            'input_mask'            : torch.ones( (B, num_target), dtype=torch.bool, device=device),
+            'target_mask'           : torch.zeros((B, num_target), dtype=torch.bool, device=device),
+            'decoder_attention_mask': torch.ones( (B, num_target), dtype=torch.int,  device=device),
         },
     }
 
-# %% ─── Cell 6: load 4M-21_XL + inject LoRA (weights = 0 at init) ─────────
+# %% --- Cell 5: load 4M-21_XL + inject LoRA (weights = 0 at init) ----------
 from fourm.models.fm import FM
-from fourm.models.lora_utils import (
-    get_LoRA_module_names, inject_trainable_LoRA
-)
+from fourm.models.lora_utils import get_LoRA_module_names, inject_trainable_LoRA
 
-print(f'Loading {PRETRAINED} …  (this may take ~2 min)')
+print(f'Loading {PRETRAINED} ...  (this may take ~2 min)')
 model = FM.from_pretrained(PRETRAINED, cache_dir=HF_CACHE)
 model = model.to(DTYPE).to(DEVICE).eval()
-print('Base model loaded.\n')
+print('Base model loaded.')
 
-# Inject LoRA adapters — at this point lora_up weights are all zeros,
-# so model behaves identically to the pre-trained 4M-21_XL baseline.
+# Inject LoRA — at this point lora_up weights are all zeros,
+# so the model behaves identically to the pre-trained 4M-21_XL baseline.
 target_modules = get_LoRA_module_names('attention')
 inject_trainable_LoRA(model, rank=LORA_RANK, scale=LORA_SCALE,
                       target_replace_modules=target_modules)
 print('LoRA injected (weights = 0 → pure baseline).\n')
 
-# %% ─── Cell 7: baseline inference (LoRA = 0, pure 4M-21) ─────────────────
+# %% --- Cell 6: baseline inference (LoRA weights = 0) -----------------------
 
 @torch.no_grad()
 def predict_depth_tokens(model, rgb_toks, depth_toks):
-    """Run a forward pass and return predicted depth tokens.
+    """Run one forward pass and return predicted depth token indices.
 
-    Returns: (B, 196) long tensor of predicted depth codes.
+    Returns: (B, 196) long tensor.
     """
-    # Build mod_dict — depth tokens are the "target", fully masked from encoder
     mod_dict = build_mod_dict(rgb_toks, depth_toks)
-
-    # Cast to model dtype for safety
-    for mod, d in mod_dict.items():
-        if 'tensor' in d:
-            d['tensor'] = d['tensor'].to(torch.long)   # indices stay long
-
     with torch.cuda.amp.autocast(dtype=DTYPE, enabled=(DEVICE.type == 'cuda')):
         mod_logits = model(mod_dict,
                            num_encoder_tokens=196,
                            num_decoder_tokens=196,
                            return_logits=True)
-
-    logits = mod_logits['tok_depth@224']        # (B, 196, vocab_size)
-    pred_tokens = logits.float().argmax(dim=-1) # (B, 196)
-    return pred_tokens
+    logits = mod_logits['tok_depth@224']         # (B, 196, vocab_size)
+    return logits.float().argmax(dim=-1)         # (B, 196)
 
 
-print('Running baseline inference …')
-baseline_pred_tokens = predict_depth_tokens(model, rgb_tokens, depth_tokens)
-print(f'Baseline pred tokens: {baseline_pred_tokens.shape}')
+print('Running baseline inference (LoRA = 0)...')
+baseline_tokens = predict_depth_tokens(model, rgb_tokens, depth_tokens)
 
-# Decode to pixel space
-with torch.no_grad():
-    baseline_depth_pix = decode_tokens(depth_tok, baseline_pred_tokens)  # (N, 1, H, W)
-print(f'Baseline depth decoded: range [{baseline_depth_pix.min():.2f}, {baseline_depth_pix.max():.2f}]\n')
+baseline_acc = (baseline_tokens == depth_tokens).float().mean().item()
+print(f'Baseline token accuracy: {baseline_acc*100:.2f}%\n')
 
-# %% ─── Cell 8: load LoRA weights and run fine-tuned inference ─────────────
-
-print(f'Loading LoRA weights from {LORA_CKPT} …')
+# %% --- Cell 7: load LoRA weights and run fine-tuned inference --------------
+print(f'Loading LoRA weights from {LORA_CKPT}...')
 lora_sd = torch.load(LORA_CKPT, map_location=DEVICE)
-# strict=False because lora_sd only contains lora_ keys; all other params are already loaded
 missing, unexpected = model.load_state_dict(lora_sd, strict=False)
-lora_keys = [k for k in lora_sd]
-print(f'  {len(lora_keys)} LoRA tensors loaded')
-print(f'  Missing (expected — non-LoRA params): {len(missing)}')
+print(f'  {len(lora_sd)} LoRA tensors loaded')
+print(f'  Missing (non-LoRA params, expected): {len(missing)}')
 print(f'  Unexpected: {len(unexpected)}')
-if unexpected:
-    print(f'  Unexpected keys: {unexpected[:5]}')
 
-print('\nRunning LoRA inference …')
-lora_pred_tokens = predict_depth_tokens(model, rgb_tokens, depth_tokens)
-print(f'LoRA pred tokens: {lora_pred_tokens.shape}')
+print('\nRunning LoRA inference...')
+lora_tokens = predict_depth_tokens(model, rgb_tokens, depth_tokens)
 
-with torch.no_grad():
-    lora_depth_pix = decode_tokens(depth_tok, lora_pred_tokens)  # (N, 1, H, W)
-print(f'LoRA depth decoded: range [{lora_depth_pix.min():.2f}, {lora_depth_pix.max():.2f}]\n')
+lora_acc = (lora_tokens == depth_tokens).float().mean().item()
+print(f'LoRA token accuracy : {lora_acc*100:.2f}%')
+print(f'Improvement         : +{(lora_acc - baseline_acc)*100:.2f}pp\n')
 
-# Token accuracy vs GT
-correct_base = (baseline_pred_tokens == depth_tokens).float().mean().item()
-correct_lora = (lora_pred_tokens      == depth_tokens).float().mean().item()
-print(f'Token accuracy on these {NUM_SAMPLES} samples:')
-print(f'  Baseline : {correct_base*100:.2f}%')
-print(f'  LoRA     : {correct_lora*100:.2f}%')
+# %% --- Cell 8: build correctness maps (14×14 grids) -----------------------
 
-# %% ─── Cell 9: tensor → numpy helpers ────────────────────────────────────
-
-def to_rgb_np(tensor):
-    """(B, 3, H, W) bfloat16 in [-1,1] → list of (H, W, 3) uint8 numpy arrays."""
-    imgs = []
-    for t in tensor.float().cpu():
-        t = (t.clamp(-1, 1) + 1) / 2      # → [0, 1]
-        t = t.permute(1, 2, 0).numpy()     # (H, W, 3)
-        imgs.append((t * 255).astype(np.uint8))
-    return imgs
+def correctness_map(pred_tokens, gt_tokens):
+    """Return a (N, 14, 14) boolean array: True where prediction == GT."""
+    correct = (pred_tokens == gt_tokens).cpu().numpy()   # (N, 196)
+    return correct.reshape(-1, 14, 14)                   # (N, 14, 14)
 
 
-def to_depth_np(tensor, colormap='magma'):
-    """(B, 1, H, W) → list of (H, W, 3) uint8 colormapped depth images.
+baseline_correct = correctness_map(baseline_tokens, depth_tokens)  # (N,14,14)
+lora_correct     = correctness_map(lora_tokens,     depth_tokens)  # (N,14,14)
 
-    Values are normalised per-sample so dynamic range is always fully used.
+# Per-sample accuracy
+baseline_acc_per = baseline_correct.mean(axis=(1, 2))   # (N,)
+lora_acc_per     = lora_correct.mean(axis=(1, 2))        # (N,)
+
+print('Per-sample token accuracy:')
+for i, s in enumerate(common):
+    print(f'  Sample {s}:  baseline {baseline_acc_per[i]*100:.2f}%  '
+          f'→  LoRA {lora_acc_per[i]*100:.2f}%  '
+          f'({(lora_acc_per[i]-baseline_acc_per[i])*100:+.2f}pp)')
+
+# %% --- Cell 9: depth colormap helper ---------------------------------------
+import matplotlib.cm as cm
+
+def colorise_depth(depth_np):
+    """Normalise a (H, W) float depth array and apply magma colormap.
+
+    Returns (H, W, 3) uint8.
     """
-    cmap = cm.get_cmap(colormap)
-    imgs = []
-    for t in tensor.float().cpu():
-        d = t.squeeze(0).numpy()            # (H, W)
-        d_norm = (d - d.min()) / (d.max() - d.min() + 1e-6)
-        rgba = cmap(d_norm)                 # (H, W, 4) in [0, 1]
-        imgs.append((rgba[:, :, :3] * 255).astype(np.uint8))
-    return imgs
+    d = depth_np.astype(np.float32)
+    d_norm = (d - d.min()) / (d.max() - d.min() + 1e-6)
+    rgba = cm.magma(d_norm)
+    return (rgba[:, :, :3] * 255).astype(np.uint8)
 
-# %% ─── Cell 10: assemble and save the comparison figure ──────────────────
+# %% --- Cell 10: assemble and save the figure --------------------------------
 
-rgb_imgs      = to_rgb_np(rgb_pixels)
-gt_imgs       = to_depth_np(gt_depth_pix)
-base_imgs     = to_depth_np(baseline_depth_pix)
-lora_imgs     = to_depth_np(lora_depth_pix)
-
-N_COLS = 4
-fig, axes = plt.subplots(NUM_SAMPLES, N_COLS,
-                         figsize=(N_COLS * 3.5, NUM_SAMPLES * 3.2))
+fig, axes = plt.subplots(NUM_SAMPLES, 4,
+                         figsize=(4 * 3.8, NUM_SAMPLES * 3.5))
 
 col_titles = [
-    'RGB (decoded)',
-    'GT Depth (decoded)',
-    '4M-21 baseline',
-    f'4M-21 + LoRA r={LORA_RANK}',
+    'RGB',
+    'GT Depth',
+    f'Baseline (acc {baseline_acc*100:.2f}%)',
+    f'LoRA r={LORA_RANK} (acc {lora_acc*100:.2f}%)',
 ]
 
+# Colour map for correctness: 0=wrong (red), 1=correct (green)
+CMAP_CORRECT = matplotlib.colors.ListedColormap(['#d62728', '#2ca02c'])
+
 for col, title in enumerate(col_titles):
-    axes[0, col].set_title(title, fontsize=11, fontweight='bold', pad=6)
+    axes[0, col].set_title(title, fontsize=11, fontweight='bold', pad=8)
 
 for row in range(NUM_SAMPLES):
-    imgs = [rgb_imgs[row], gt_imgs[row], base_imgs[row], lora_imgs[row]]
-    for col, img in enumerate(imgs):
-        ax = axes[row, col]
-        ax.imshow(img)
-        ax.axis('off')
-        if col == 0:
-            ax.set_ylabel(f'Sample {common[row]}', fontsize=8, rotation=90,
-                          labelpad=4, va='center')
+    ax_rgb, ax_depth, ax_base, ax_lora = axes[row]
 
-# Add token accuracy as a figure suptitle
+    # Col 1 — RGB
+    ax_rgb.imshow(rgb_imgs[row])
+    ax_rgb.set_ylabel(f'#{common[row]}', fontsize=9, rotation=0,
+                      labelpad=28, va='center')
+
+    # Col 2 — GT depth
+    ax_depth.imshow(colorise_depth(depth_imgs[row]))
+
+    # Col 3 — Baseline correctness map
+    ax_base.imshow(baseline_correct[row], cmap=CMAP_CORRECT,
+                   vmin=0, vmax=1, interpolation='nearest')
+    ax_base.set_xlabel(f'{baseline_acc_per[row]*100:.1f}% correct',
+                       fontsize=8)
+
+    # Col 4 — LoRA correctness map
+    ax_lora.imshow(lora_correct[row], cmap=CMAP_CORRECT,
+                   vmin=0, vmax=1, interpolation='nearest')
+    ax_lora.set_xlabel(f'{lora_acc_per[row]*100:.1f}% correct  '
+                       f'({(lora_acc_per[row]-baseline_acc_per[row])*100:+.1f}pp)',
+                       fontsize=8)
+
+    for ax in [ax_rgb, ax_depth, ax_base, ax_lora]:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+# Legend for correctness maps
+legend_handles = [
+    mpatches.Patch(color='#2ca02c', label='Correct token'),
+    mpatches.Patch(color='#d62728', label='Wrong token'),
+]
+fig.legend(handles=legend_handles, loc='lower center',
+           ncol=2, fontsize=10, bbox_to_anchor=(0.72, -0.01))
+
 fig.suptitle(
-    f'NYUv2 Depth  |  Token accuracy on {NUM_SAMPLES} val samples:\n'
-    f'Baseline {correct_base*100:.2f}%   →   LoRA {correct_lora*100:.2f}%',
-    fontsize=11, y=1.01
+    f'NYUv2 depth  |  5 val samples  |  '
+    f'Baseline {baseline_acc*100:.2f}%  →  LoRA {lora_acc*100:.2f}%  '
+    f'({(lora_acc-baseline_acc)*100:+.2f}pp)',
+    fontsize=12, y=1.01
 )
 
 plt.tight_layout()
@@ -286,19 +288,25 @@ out_path = FIGURES_DIR / 'depth_comparison.png'
 fig.savefig(out_path, dpi=150, bbox_inches='tight')
 print(f'\nFigure saved → {out_path}')
 
-# ── also show inline if running in JupyterLab ──────────────────────────────
 try:
     from IPython.display import display, Image as IPImage
     display(IPImage(str(out_path)))
 except ImportError:
-    pass   # running as plain script — just open the file
+    pass
 
 # %% [markdown]
-# ## Next steps
+# ## What the correctness maps show
 #
-# 1. Run the 50-epoch full training:
-#    ```bash
+# Each cell in the 14×14 grid corresponds to one depth token (covers a 16×16 px
+# patch of the 224×224 image). GREEN = the model predicted the exact correct
+# VQ-VAE token index; RED = wrong prediction.
+#
+# A random baseline would be ~0.012% correct (1/8192 vocab).
+# Any meaningful structure in the green pattern (e.g. flat walls, floors)
+# suggests the model has learned scene geometry even at this token level.
+#
+# ## Next steps
+# 1. Launch the 50-epoch full run:
 #    sbatch scripts/snellius/04_ft_depth_nyu.sh
-#    ```
-# 2. Repeat this notebook with `LORA_CKPT = 'output/depth/nyu_rgb_r8/lora_weights-best.pth'`
-# 3. Compute pixel-space metrics (δ₁, RMSE, AbsRel) with `eval_depth_pixel.py`
+# 2. Once a decoder is available, replace correctness maps with pixel-space
+#    depth images (eval_depth_pixel.py with delta1, RMSE, AbsRel)

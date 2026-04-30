@@ -45,9 +45,11 @@ num_workers: 8
 output_dir: 'output/depth/nyu_rgb_r8_e5'
 
 # Logging
-# Prerequisite (one-time, on Snellius login node): wandb login
+# Snellius compute nodes have no internet → offline mode.
+# After the job completes, sync from the login node:
+#   wandb sync ~/4m-peft/wandb/run-*/
 log_wandb: true
 wandb_project: '4m-peft'
 wandb_entity: null
 wandb_run_name: 'nyu_depth_r8_xl_e5_val'
-wandb_mode: 'online'
+wandb_mode: 'offline'

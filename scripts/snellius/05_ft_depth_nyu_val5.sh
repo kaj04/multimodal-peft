@@ -32,6 +32,11 @@ conda activate 4m-peft
 # Ensure wandb is installed
 pip install -q wandb
 
+# Snellius compute nodes have no outbound internet.
+# Log offline; sync to cloud from login node after job with:
+#   wandb sync ~/4m-peft/wandb/run-*/
+export WANDB_MODE=offline
+
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 REPO_ROOT="$HOME/4m-peft"
 

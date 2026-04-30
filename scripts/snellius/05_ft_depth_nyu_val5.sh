@@ -29,10 +29,9 @@ module load Anaconda3/2023.07-2
 eval "$(conda shell.bash hook)"
 conda activate 4m-peft
 
-# Ensure wandb is installed (needed for offline logging)
+# Ensure wandb is installed
 pip install -q wandb
 
-export WANDB_MODE=offline          # log locally, sync manually after job
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 REPO_ROOT="$HOME/4m-peft"
 

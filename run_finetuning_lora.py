@@ -485,11 +485,27 @@ def evaluate(
         args,
         epoch: int = 0,
 ):
-    """Evaluate token-level prediction accuracy on the target modality.
+    """Evaluate token-level loss and top-1 accuracy on the target modality.
 
-    Note: This computes token-level cross-entropy loss and top-1 accuracy.
-    Full pixel-space metrics (mIoU, delta1) require decoding through the
-    VQ-VAE tokenizer — this is left as a TODO for the next development phase.
+    What we are predicting
+    ----------------------
+    The model is a token-to-token sequence predictor. Given 196 RGB tokens
+    (14×14 patch grid, each an index into a 16,384-entry VQ-VAE codebook),
+    it must predict 196 depth tokens (indices into an 8,192-entry codebook).
+
+    At each of the 196 positions the decoder produces a probability distribution
+    over 8,192 possible depth codes — exactly like a 196-way classification with
+    8,192 classes per position.
+
+    Metrics
+    -------
+    - loss:     cross-entropy over all 196 × batch token predictions (lower = better)
+    - token_acc: fraction of the 196 positions where argmax == ground truth
+                 (higher = better; random baseline ≈ 1/8192 ≈ 0.012%)
+
+    Note: pixel-space metrics (δ₁, RMSE in metres) require passing the
+    predicted tokens through the VQ-VAE depth decoder. That is implemented
+    in a separate evaluation script (eval_depth_pixel.py — TODO Phase 2).
     """
     model.eval()
     metric_logger = utils.MetricLogger(delimiter='  ')
@@ -497,8 +513,8 @@ def evaluate(
     print_freq = 20
 
     for input_tokens, target_tokens in metric_logger.log_every(data_loader, print_freq, header):
-        input_tokens = input_tokens.to(device, non_blocking=True)
-        target_tokens = target_tokens.to(device, non_blocking=True)
+        input_tokens  = input_tokens.to(device, non_blocking=True)   # (B, 196)
+        target_tokens = target_tokens.to(device, non_blocking=True)  # (B, 196)
 
         mod_dict = build_mod_dict(
             input_tokens, target_tokens,
@@ -510,16 +526,33 @@ def evaluate(
 
         with torch.cuda.amp.autocast(enabled=(args.dtype in ['float16', 'fp16']),
                                       dtype=torch.bfloat16 if args.dtype in ['bfloat16', 'bf16'] else torch.float16):
-            loss, mod_loss = model(
+            # Single forward pass: return logits to compute both loss and accuracy.
+            # mod_logits[target_mod] shape: (B, num_target_tokens, vocab_size)
+            #   e.g. (B, 196, 8192) for depth estimation
+            mod_logits = model(
                 mod_dict,
                 num_encoder_tokens=args.num_input_tokens,
                 num_decoder_tokens=args.num_target_tokens,
-                loss_type=args.loss_type,
+                return_logits=True,
             )
 
+        logits = mod_logits[args.target_mod]              # (B, 196, vocab_size)
+        B, T, V = logits.shape
+
+        # Cross-entropy loss (matches the training objective exactly)
+        loss = F.cross_entropy(
+            logits.reshape(-1, V).float(),                # (B*196, vocab_size)
+            target_tokens.reshape(-1).long(),             # (B*196,)
+            reduction='mean',
+        )
+
+        # Top-1 token accuracy:
+        # "what % of the 196 depth token positions did the model get exactly right?"
+        preds = logits.argmax(dim=-1)                     # (B, 196)
+        token_acc = (preds == target_tokens).float().mean()
+
         metric_logger.update(loss=loss.item())
-        for mod_name, mod_l in mod_loss.items():
-            metric_logger.update(**{f'loss_{mod_name}': mod_l.item()})
+        metric_logger.update(token_acc=token_acc.item())
 
     metric_logger.synchronize_between_processes()
     print(f'[Eval]  Averaged stats: {metric_logger}')
@@ -802,6 +835,11 @@ def main(args):
         }
         if log_writer is not None:
             log_writer.update(log_stats)
+            if eval_stats:
+                log_writer.update({
+                    'val/loss':      eval_stats.get('loss', 0),
+                    'val/token_acc': eval_stats.get('token_acc', 0),
+                })
         if args.output_dir and utils.is_main_process():
             with open(os.path.join(args.output_dir, 'log.txt'), 'a') as f:
                 f.write(json.dumps(log_stats) + '\n')

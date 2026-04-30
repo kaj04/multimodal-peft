@@ -45,10 +45,9 @@ num_workers: 8
 output_dir: 'output/depth/nyu_rgb_r8_e5'
 
 # Logging
-# W&B runs in offline mode on Snellius compute nodes (no internet access).
-# After the job: run `wandb sync output/depth/nyu_rgb_r8_e5/wandb/` to upload.
+# Prerequisite (one-time, on Snellius login node): wandb login
 log_wandb: true
 wandb_project: '4m-peft'
 wandb_entity: null
 wandb_run_name: 'nyu_depth_r8_xl_e5_val'
-wandb_mode: 'offline'
+wandb_mode: 'online'

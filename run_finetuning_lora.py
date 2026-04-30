@@ -400,7 +400,7 @@ def train_one_epoch(
     optimizer.zero_grad()
 
     for step, (input_tokens, target_tokens) in enumerate(
-            metric_logger.log_every(data_loader, print_freq, header)):
+            metric_logger.log_every(data_loader, print_freq, header=header)):
 
         it = start_steps + step  # global step index
 
@@ -512,7 +512,7 @@ def evaluate(
     header = f'[Eval] Epoch [{epoch}]'
     print_freq = 20
 
-    for input_tokens, target_tokens in metric_logger.log_every(data_loader, print_freq, header):
+    for input_tokens, target_tokens in metric_logger.log_every(data_loader, print_freq, header=header):
         input_tokens  = input_tokens.to(device, non_blocking=True)   # (B, 196)
         target_tokens = target_tokens.to(device, non_blocking=True)  # (B, 196)
 

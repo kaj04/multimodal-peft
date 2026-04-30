@@ -40,6 +40,7 @@ import datetime
 import json
 import math
 import os
+import shutil
 import sys
 import time
 import warnings
@@ -339,6 +340,41 @@ def get_model(args) -> nn.Module:
 
 
 # ---------------------------------------------------------------------------
+# LoRA-only checkpoint: save/load just the adapter weights (~60 MB for XL)
+# ---------------------------------------------------------------------------
+
+def save_lora_weights(model_without_ddp: nn.Module, output_dir: str, tag: str = 'best'):
+    """Save only the LoRA adapter weights — much smaller than a full checkpoint.
+
+    The full model state_dict for 4M-21_XL is ~9 GB. The LoRA adapters are
+    ~60 MB (14.9M params at bfloat16). Saving them separately lets you:
+      - Share the adapters without distributing the full model
+      - Load them on top of a fresh FM.from_pretrained() for evaluation
+      - Iterate quickly on ablations (one adapter per run, not one 9GB file)
+
+    Args:
+        model_without_ddp: the model (unwrapped from DDP)
+        output_dir: directory where lora_weights-{tag}.pth is written
+        tag: string suffix, e.g. 'best', '5', 'final'
+    """
+    lora_sd = {k: v.cpu() for k, v in model_without_ddp.state_dict().items()
+               if 'lora_' in k}
+    if not lora_sd:
+        print('  [save_lora_weights] Warning: no lora_ keys found in state_dict — skipping.')
+        return None
+
+    path = os.path.join(output_dir, f'lora_weights-{tag}.pth')
+    torch.save(lora_sd, path)
+
+    n_tensors = len(lora_sd)
+    n_params  = sum(v.numel() for v in lora_sd.values())
+    size_mb   = sum(v.nbytes  for v in lora_sd.values()) / 1e6
+    print(f'  LoRA weights saved → {path}')
+    print(f'    {n_tensors} tensors | {n_params / 1e6:.2f}M params | {size_mb:.1f} MB')
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Training loop (one epoch)
 # ---------------------------------------------------------------------------
 
@@ -418,13 +454,18 @@ def train_one_epoch(
         # Logging
         metric_logger.update(loss=loss_value)
         metric_logger.update(lr=optimizer.param_groups[0]['lr'])
+        if grad_norm is not None:
+            metric_logger.update(grad_norm=grad_norm)
         for mod_name, mod_l in mod_loss.items():
             metric_logger.update(**{f'loss_{mod_name}': mod_l.item()})
 
         if log_writer is not None and (step + 1) % args.accum_iter == 0:
-            log_writer.update({'train/loss': loss_value,
-                               'train/lr': optimizer.param_groups[0]['lr'],
-                               'train/step': it})
+            log_writer.update({
+                'train/loss': loss_value,
+                'train/lr': optimizer.param_groups[0]['lr'],
+                'train/grad_norm': grad_norm if grad_norm is not None else 0.0,
+                'train/step': it,
+            })
 
     # Gather stats from all processes
     metric_logger.synchronize_between_processes()
@@ -674,6 +715,11 @@ def main(args):
     # -----------------------------------------------------------------------
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        # Copy the config YAML into the output dir for full reproducibility
+        if utils.is_main_process() and getattr(args, 'config_path', ''):
+            dest = os.path.join(args.output_dir, 'config.yaml')
+            shutil.copy(args.config_path, dest)
+            print(f'Config saved → {dest}')
 
     utils.auto_load_model(
         args=args, model=model, model_without_ddp=model_without_ddp,
@@ -737,11 +783,13 @@ def main(args):
             # Save best checkpoint (by val loss)
             if eval_stats.get('loss', float('inf')) < best_loss:
                 best_loss = eval_stats['loss']
-                if args.output_dir:
+                if args.output_dir and utils.is_main_process():
                     utils.save_model(
                         args=args, model=model, model_without_ddp=model_without_ddp,
                         optimizer=optimizer, loss_scaler=loss_scaler, epoch='best',
                     )
+                    # Also save compact LoRA-only weights for best checkpoint
+                    save_lora_weights(model_without_ddp, args.output_dir, tag='best')
                 print(f'  New best val loss: {best_loss:.4f}')
 
         # Log stats
@@ -762,6 +810,17 @@ def main(args):
     print(f'Training completed in {total_time}')
     print(f'Best val loss: {best_loss:.4f}')
     print(f'Checkpoints saved to: {args.output_dir}')
+
+    # Save LoRA-only weights at end of training (compact, shareable artifact)
+    if args.output_dir and utils.is_main_process():
+        final_epoch = args.epochs - 1
+        save_lora_weights(model_without_ddp, args.output_dir, tag=f'epoch{final_epoch}')
+        print(f'\nArtifacts in {args.output_dir}:')
+        print(f'  checkpoint-best.pth     — full model weights at best val loss (~9 GB)')
+        print(f'  lora_weights-best.pth   — LoRA adapter weights only (~60 MB) ← use this')
+        print(f'  lora_weights-epoch{final_epoch}.pth — LoRA adapter weights at final epoch')
+        print(f'  log.txt                 — per-epoch train/val loss (JSON lines)')
+        print(f'  config.yaml             — exact config used for this run')
 
 
 if __name__ == '__main__':

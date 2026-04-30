@@ -41,7 +41,9 @@ num_workers: 8
 output_dir: 'output/depth/nyu_rgb_r8'
 
 # Logging
+# W&B disabled — sync issues on Snellius not yet resolved.
+# Training progress tracked via log.txt in output_dir.
 log_wandb: false
 wandb_project: '4m-peft'
 wandb_entity: null
-wandb_run_name: 'nyu_depth_r8_xl'
+wandb_run_name: 'nyu_depth_r8_xl_50ep'

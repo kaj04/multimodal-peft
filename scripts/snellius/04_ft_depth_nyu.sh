@@ -11,7 +11,7 @@
 #SBATCH --ntasks=4
 #SBATCH --cpus-per-task=9
 #SBATCH --mem=120G
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/ft_depth_nyu_%j.out
 
 set -e

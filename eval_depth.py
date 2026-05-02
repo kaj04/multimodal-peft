@@ -90,6 +90,7 @@ from fourm.models.generate import (
 from fourm.data.modality_info import MODALITY_INFO
 from fourm.data.modality_transforms import RGBTransform
 from fourm.utils.plotting_utils import decode_tok_depth
+from fourm.models.lora_utils import inject_trainable_LoRA, get_LoRA_module_names
 
 # Generation hyper-parameters — mirrors DEFAULTS_RGB2X in demo_4M_sampler.py
 DEPTH_GEN_PARAMS = {
@@ -131,6 +132,11 @@ def parse_args():
                    help='Path to text tokenizer JSON')
     p.add_argument('--lora_weights', default=None,
                    help='Path to lora_weights-*.pth — if omitted, runs baseline')
+    p.add_argument('--lora_rank', type=int, default=8,
+                   help='LoRA rank used during training (must match checkpoint)')
+    p.add_argument('--lora_modules', default='attention',
+                   choices=['selfattn', 'crossattn', 'attention', 'mlp', 'all'],
+                   help='LoRA modules used during training (must match checkpoint)')
 
     # Evaluation
     p.add_argument('--max_depth_clip', type=float, default=10.0,
@@ -469,7 +475,14 @@ def main():
     fm = FM.from_pretrained(args.fm)
 
     if args.lora_weights:
-        print(f'  Injecting LoRA weights from {args.lora_weights} ...')
+        # Must inject LoRA architecture BEFORE loading weights —
+        # otherwise load_state_dict(strict=False) silently drops all lora_ keys
+        # because the base FM has no lora_A/lora_B layers.
+        target_modules = get_LoRA_module_names(args.lora_modules)
+        print(f'  Injecting LoRA architecture (rank={args.lora_rank}, modules={target_modules}) ...')
+        inject_trainable_LoRA(fm, rank=args.lora_rank, scale=1.0,
+                              target_replace_modules=target_modules)
+        print(f'  Loading LoRA weights from {args.lora_weights} ...')
         lora_sd = torch.load(args.lora_weights, map_location='cpu')
         missing, unexpected = fm.load_state_dict(lora_sd, strict=False)
         n_loaded = len(lora_sd)

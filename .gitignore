@@ -34,6 +34,7 @@ hf_cache/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+!notebooks/*.ipynb
 
 # Editors
 .vscode/

@@ -1,0 +1,36 @@
+# LoRA fine-tuning on NYUv2 depth estimation — rank ablation r=16
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+lora_rank: 16
+lora_scale: 1.0
+lora_modules: attention
+
+task: depth
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+epochs: 50
+batch_size: 2
+accum_iter: 8
+blr: 1.0e-4
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 5
+save_ckpt_freq: 10
+
+data_path: '/scratch-shared/tesr125338/nyu_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
+num_workers: 8
+
+output_dir: 'output/depth/nyu_rgb_r16'
+
+log_wandb: false
+wandb_project: '4m-peft'
+wandb_entity: null
+wandb_run_name: 'nyu_depth_r16_xl_50ep'

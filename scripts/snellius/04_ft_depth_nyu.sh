@@ -38,7 +38,6 @@ OMP_NUM_THREADS=1 torchrun \
     --master_port=29501 \
     run_finetuning_lora.py \
     --config cfgs/finetune/depth/nyu_rgb_r8.yaml \
-    --dist_eval \
-    --log_wandb
+    --dist_eval
 
 echo "Training complete. Checkpoints in: output/depth/nyu_rgb_r8/"

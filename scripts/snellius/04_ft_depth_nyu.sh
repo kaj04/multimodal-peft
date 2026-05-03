@@ -24,14 +24,12 @@ conda activate 4m-peft
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 export WANDB_API_KEY=$(grep password ~/.netrc | awk '{print $2}')
 export WANDB_PROJECT="4m-peft"
+export WANDB_MODE=offline   # compute nodes can't reach api.wandb.ai — sync after job
 REPO_ROOT="$HOME/4m-peft"
 
 mkdir -p logs
 
 cd "$REPO_ROOT"
-
-# Explicit WandB login — required on Snellius compute nodes
-wandb login "$WANDB_API_KEY"
 
 echo "=== Starting LoRA fine-tuning: NYUv2 depth, rank=8, XL ==="
 

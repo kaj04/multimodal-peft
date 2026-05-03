@@ -1,17 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# 04_ft_depth_nyu.sh  —  LoRA fine-tuning: NYUv2 depth estimation (1 x A100)
+# 04_ft_depth_nyu.sh  —  LoRA fine-tuning: NYUv2 depth estimation (4 x A100)
 #
 # Usage:
 #   sbatch scripts/snellius/04_ft_depth_nyu.sh
 # =============================================================================
 #SBATCH --job-name=4m_lora_depth_nyu
 #SBATCH --partition=gpu_a100
-#SBATCH --gres=gpu:1
-#SBATCH --ntasks=1
+#SBATCH --gres=gpu:4
+#SBATCH --ntasks=4
 #SBATCH --cpus-per-task=9
-#SBATCH --mem=60G
-#SBATCH --time=24:00:00
+#SBATCH --mem=240G
+#SBATCH --time=48:00:00
 #SBATCH --output=logs/ft_depth_nyu_%j.out
 
 set -e

@@ -96,8 +96,8 @@ def load_gt_normal(path, mask_path):
     mask_224 = np.array(
         Image.fromarray(mask.astype(np.uint8) * 255).resize((224, 224), Image.NEAREST)
     ) > 0
-    # invalid normals are (0,0,0)
-    valid = mask_224 & (norm.squeeze(-1) > 0.5)
+    # invalid normals are (0,0,0) — DIODE normals have norm ~0.37, not 1.0
+    valid = mask_224 & (norm.squeeze(-1) > 0.01)
     return gt_224, valid
 
 
@@ -125,7 +125,7 @@ def run_normal_inference(sampler, rgb_tensor, tok_text_obj, device, seed=42):
 
 
 def decode_normals(out, tok_mod, tok_normal_obj):
-    tokens = out[tok_mod]['tokens'].squeeze(0).reshape(1, 14, 14)
+    tokens = out[tok_mod]['ids'].squeeze(0).reshape(1, 14, 14)
     with torch.no_grad():
         dec = tok_normal_obj.decode_tokens(
             tokens, timesteps=DIVAE_STEPS, image_size=224, verbose=False
@@ -168,19 +168,18 @@ def main(args):
 
     # ── load models ───────────────────────────────────────────────────────────
     print('Loading baseline FM ...')
-    fm_base = FM.from_pretrained(FM_MODEL, cache_dir=HF_CACHE,
-                                  torch_dtype=torch.bfloat16).to(device_base).eval()
+    fm_base = FM.from_pretrained(FM_MODEL, cache_dir=HF_CACHE
+                                 ).to(torch.bfloat16).to(device_base).eval()
 
     print('Loading LoRA FM ...')
-    fm_lora = FM.from_pretrained(FM_MODEL, cache_dir=HF_CACHE,
-                                  torch_dtype=torch.bfloat16)
+    fm_lora = FM.from_pretrained(FM_MODEL, cache_dir=HF_CACHE)
     target_mods = get_LoRA_module_names(LORA_MODS)
     inject_trainable_LoRA(fm_lora, rank=LORA_RANK, scale=1.0,
                           target_replace_modules=target_mods)
     lora_sd = torch.load(args.lora_weights, map_location='cpu')
     missing, _ = fm_lora.load_state_dict(lora_sd, strict=False)
     print(f'  Loaded {len(lora_sd)} LoRA tensors | missing={len(missing)}')
-    fm_lora = fm_lora.to(device_lora).eval()
+    fm_lora = fm_lora.to(torch.bfloat16).to(device_lora).eval()
 
     print('Loading normal tokenizer ...')
     tok_norm_base = DiVAE.from_pretrained(TOK_NORMAL, cache_dir=HF_CACHE).to(device_base).eval()
@@ -206,8 +205,8 @@ def main(args):
             if valid.sum() < 100:
                 continue
 
-            rgb_t_base = load_rgb_tensor(s['rgb'], device_base)
-            rgb_t_lora = load_rgb_tensor(s['rgb'], device_lora)
+            rgb_t_base = load_rgb_tensor(s['rgb'], device_base).to(torch.bfloat16)
+            rgb_t_lora = load_rgb_tensor(s['rgb'], device_lora).to(torch.bfloat16)
 
             with torch.no_grad():
                 out_b, tm_b = run_normal_inference(sampler_base, rgb_t_base, tok_text, device_base, seed=42+i)

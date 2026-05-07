@@ -199,14 +199,16 @@ def eval_absrel_on_samples(model, dataset, tok_depth, device, args):
             pred_ids_2d  = pred_ids.reshape(1, 14, 14)           # (1, 14, 14)
             gt_ids_2d    = gt_tokens.reshape(1, 14, 14).to(device)
 
-            # Decode both with DiVAE
-            pred_depth = tok_depth.decode_tokens(
-                pred_ids_2d, timesteps=args.divae_steps, image_size=224, verbose=False
-            ).squeeze().cpu()   # (224, 224)
+            # Decode both with DiVAE (autocast needed: model is bfloat16,
+            # diffusion scheduler creates float32 intermediates internally)
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                pred_depth = tok_depth.decode_tokens(
+                    pred_ids_2d, timesteps=args.divae_steps, image_size=224, verbose=False
+                ).squeeze().float().cpu()   # (224, 224)
 
-            gt_depth = tok_depth.decode_tokens(
-                gt_ids_2d, timesteps=args.divae_steps, image_size=224, verbose=False
-            ).squeeze().cpu()   # (224, 224)
+                gt_depth = tok_depth.decode_tokens(
+                    gt_ids_2d, timesteps=args.divae_steps, image_size=224, verbose=False
+                ).squeeze().float().cpu()   # (224, 224)
 
             valid = gt_depth > 0
             if valid.sum() < 10:

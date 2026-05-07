@@ -22,8 +22,8 @@ parser.add_argument('--n_epochs', type=int, default=10)
 args = parser.parse_args()
 
 run = wandb.init(
-    project = args.project,
-    entity  = args.entity,
+    project = '4M-PEFT',
+    entity  = 'francesco-colasurdo04-eindhoven-university-of-technology',
     name    = 'wandb-connectivity-test',
     config  = dict(
         model        = '4M-21_XL',

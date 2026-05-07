@@ -2,7 +2,7 @@
 #
 # Trains LoRA (same config as main run) on N=50 fixed training samples
 # for many epochs until CE loss saturates, then evaluates AbsRel on
-# those same samples.
+# those same samples via teacher-forced argmax prediction.
 #
 # Diagnostic outcomes:
 #   CE → 0  AND  AbsRel improves  → generalisation problem (fix hyperparms)
@@ -29,22 +29,18 @@ sys.path.insert(0, os.path.join(REPO_ROOT, 'ml-4m'))
 import fourm.utils as utils
 from fourm.models.fm import FM
 from fourm.models.lora_utils import inject_trainable_LoRA, get_LoRA_module_names
-from fourm.data.modality_info import MODALITY_INFO
-from fourm.models.generate import (
-    GenerationSampler, build_chained_generation_schedules,
-    init_full_input_modality, init_empty_target_modality,
-)
-from tokenizers import Tokenizer
-from fourm.vq.vqvae import DiVAE
 
 # ── Config ────────────────────────────────────────────────────────────────────
+INPUT_MOD      = 'tok_rgb@224'
+TARGET_MOD     = 'tok_depth@224'
+NUM_TOKENS     = 196   # 14×14 grid
+
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument('--data_path',    default='/scratch-shared/tesr125338/nyu_tokens/train')
     p.add_argument('--fm_model',     default='EPFL-VILAB/4M-21_XL')
     p.add_argument('--hf_cache',     default='/scratch-shared/tesr125338/hf_cache')
     p.add_argument('--tok_depth',    default='EPFL-VILAB/4M_tokenizers_depth_8k_224-448')
-    p.add_argument('--tok_text',     default='ml-4m/fourm/utils/tokenizer/trained/text_tokenizer_4m_wordpiece_30k.json')
     p.add_argument('--output_dir',   default='output/overfit_test')
 
     # LoRA — identical to main run
@@ -63,49 +59,96 @@ def get_args():
     p.add_argument('--wandb_project', default='4M-PEFT')
     p.add_argument('--wandb_entity',  default='francesco-colasurdo04-eindhoven-university-of-technology')
 
-    # AbsRel eval
+    # DiVAE decoding
     p.add_argument('--divae_steps',  type=int,   default=25)
     return p.parse_args()
 
 
 # ── Dataset — tokenised NYU samples ──────────────────────────────────────────
 class NyuTokenDataset(torch.utils.data.Dataset):
-    """Loads pre-tokenised NYU samples (one .pth file per sample)."""
+    """Loads N random samples from the pre-tokenised NYU directory.
+
+    Structure expected:
+        root/tok_rgb/00000.npy   ← RGB token indices   (196,)
+        root/tok_depth/00000.npy ← depth token indices (196,)
+    """
     def __init__(self, root, n_samples, seed=42):
-        files = sorted(Path(root).glob('**/*.pth'))
-        rng   = np.random.default_rng(seed)
-        idxs  = rng.choice(len(files), size=min(n_samples, len(files)), replace=False)
-        self.files = [files[i] for i in sorted(idxs)]
-        print(f'  Overfit dataset: {len(self.files)} samples from {root}')
+        root = Path(root)
+        rgb_dir   = root / 'tok_rgb'
+        depth_dir = root / 'tok_depth'
+
+        stems = sorted(p.stem for p in rgb_dir.glob('*.npy')
+                       if (depth_dir / (p.stem + '.npy')).exists())
+        if len(stems) == 0:
+            raise RuntimeError(f'No matching tok_rgb / tok_depth pairs found in {root}')
+
+        rng  = np.random.default_rng(seed)
+        idxs = rng.choice(len(stems), size=min(n_samples, len(stems)), replace=False)
+        self.stems     = [stems[i] for i in sorted(idxs)]
+        self.rgb_dir   = rgb_dir
+        self.depth_dir = depth_dir
+        print(f'  Overfit dataset: {len(self.stems)} samples from {root}')
 
     def __len__(self):
-        return len(self.files)
+        return len(self.stems)
 
     def __getitem__(self, idx):
-        return torch.load(self.files[idx], map_location='cpu')
+        stem  = self.stems[idx]
+        rgb   = torch.from_numpy(np.load(self.rgb_dir   / f'{stem}.npy').astype(np.int64))
+        depth = torch.from_numpy(np.load(self.depth_dir / f'{stem}.npy').astype(np.int64))
+        return rgb, depth   # (196,), (196,)
+
+
+# ── Build 4M-compatible mod_dict from token tensors ──────────────────────────
+def build_mod_dict(input_tokens: torch.Tensor,
+                   target_tokens: torch.Tensor) -> dict:
+    """Build mod_dict for RGB→depth fine-tuning forward pass.
+
+    Input (RGB) tokens are fully visible to the encoder.
+    Target (depth) tokens are hidden from encoder and predicted by decoder.
+    """
+    B      = input_tokens.shape[0]
+    device = input_tokens.device
+
+    dec_attn = torch.ones((B, NUM_TOKENS), dtype=torch.int, device=device)
+    dec_attn[:, 0] = NUM_TOKENS   # ROAR: first slot encodes full sequence length
+
+    return {
+        INPUT_MOD: {
+            'tensor':                   input_tokens,
+            'input_mask':               torch.zeros((B, NUM_TOKENS), dtype=torch.bool, device=device),
+            'target_mask':              torch.ones( (B, NUM_TOKENS), dtype=torch.bool, device=device),
+            'decoder_attention_mask':   torch.zeros((B, NUM_TOKENS), dtype=torch.int,  device=device),
+        },
+        TARGET_MOD: {
+            'tensor':                   target_tokens,
+            'input_mask':               torch.ones( (B, NUM_TOKENS), dtype=torch.bool, device=device),
+            'target_mask':              torch.zeros((B, NUM_TOKENS), dtype=torch.bool, device=device),
+            'decoder_attention_mask':   dec_attn,
+        },
+    }
 
 
 # ── CE loss on one batch ──────────────────────────────────────────────────────
-def compute_ce_loss(model, batch, device):
+def compute_ce_loss(model, rgb_tokens, depth_tokens, device):
     """Forward pass → CE loss on depth tokens only."""
-    # batch is a dict of modality tensors from the tokenised dataset
-    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-             for k, v in batch.items()}
+    rgb_tokens   = rgb_tokens.to(device)
+    depth_tokens = depth_tokens.to(device)
+    mod_dict = build_mod_dict(rgb_tokens, depth_tokens)
     with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-        loss_dict = model(batch)
-    # sum only depth token loss; fall back to total loss if key absent
-    depth_key = 'tok_depth@224'
-    if depth_key in loss_dict:
-        return loss_dict[depth_key]
-    return sum(loss_dict.values())
+        loss, mod_loss = model(mod_dict,
+                               num_encoder_tokens=NUM_TOKENS,
+                               num_decoder_tokens=NUM_TOKENS,
+                               loss_type='mod')
+    return loss
 
 
 # ── AbsRel evaluation (scale-shift aligned) ──────────────────────────────────
 def scale_shift_align(pred, gt, valid):
     """Least-squares affine alignment: find s, t s.t. pred*s+t ≈ gt."""
     p, g = pred[valid].float(), gt[valid].float()
-    A = torch.stack([p, torch.ones_like(p)], dim=1)
-    sol = torch.linalg.lstsq(A, g.unsqueeze(1)).solution
+    A    = torch.stack([p, torch.ones_like(p)], dim=1)
+    sol  = torch.linalg.lstsq(A, g.unsqueeze(1)).solution
     s, t = sol[0, 0], sol[1, 0]
     return pred * s + t
 
@@ -116,67 +159,60 @@ def absrel(pred, gt, valid):
 
 
 @torch.no_grad()
-def eval_absrel_on_samples(model, dataset, tok_depth, tok_text_obj, device, args):
-    """Run autoregressive depth prediction on all overfit samples → AbsRel."""
+def eval_absrel_on_samples(model, dataset, tok_depth, device, args):
+    """Teacher-forced argmax depth prediction on all overfit samples → AbsRel.
+
+    For each sample:
+      1. Build mod_dict from RGB + GT depth tokens.
+      2. Call model(return_logits=True) → depth token logits.
+      3. Argmax → predicted depth token IDs.
+      4. Decode BOTH predicted and GT tokens with DiVAE.
+      5. Compute AbsRel with scale-shift alignment.
+
+    Using token-level GT (decoded from GT tokens) as reference means
+    AbsRel → 0 iff the model predicts the exact correct token IDs.
+    """
     model.eval()
-    sampler  = GenerationSampler(model)
     abs_rels = []
 
-    import torchvision.transforms as T
-    from PIL import Image
-
-    rgb_transform = T.Compose([
-        T.Resize((224, 224)),
-        T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-
     for idx in range(len(dataset)):
-        sample = dataset[idx]
+        rgb_tokens, gt_tokens = dataset[idx]
 
-        # ── get RGB tensor ────────────────────────────────────────────────────
-        if 'rgb@224' in sample and 'tensor' in sample['rgb@224']:
-            rgb_t = sample['rgb@224']['tensor'].unsqueeze(0).to(device, dtype=torch.bfloat16)
-        else:
-            print(f'  [skip] sample {idx}: no rgb@224 tensor')
-            continue
+        # Add batch dimension
+        rgb_b = rgb_tokens.unsqueeze(0).to(device)   # (1, 196)
+        gt_b  = gt_tokens.unsqueeze(0).to(device)    # (1, 196)
 
-        # ── get GT depth ──────────────────────────────────────────────────────
-        if 'depth_zbuffer@224' in sample and 'tensor' in sample['depth_zbuffer@224']:
-            gt_depth = sample['depth_zbuffer@224']['tensor'].squeeze()   # (224,224)
-        else:
-            print(f'  [skip] sample {idx}: no depth GT')
-            continue
-
-        valid = gt_depth > 0
+        mod_dict = build_mod_dict(rgb_b, gt_b)
 
         try:
-            # ── autoregressive depth prediction ───────────────────────────────
-            ntoks    = 196
-            tok_mod  = 'tok_depth@224'
-            schedule = build_chained_generation_schedules(
-                cond_domains=['rgb@224'], target_domains=[tok_mod],
-                tokens_per_target=[ntoks],
-                autoregression_schemes=['roar'],
-                decoding_steps=[25],
-                token_decoding_schedules=['linear'],
-                temps=[1.0], temp_schedules=['constant'],
-                cfg_scales=[2.0], cfg_schedules=['constant'],
-                cfg_grow_conditioning=True,
-            )
-            eos_id = tok_text_obj.token_to_id('[EOS]')
-            sd = {'rgb@224': {'tensor': rgb_t}}
-            sd = init_full_input_modality(sd, MODALITY_INFO, 'rgb@224', device, eos_id=eos_id)
-            sd = init_empty_target_modality(sd, MODALITY_INFO, tok_mod, 1, ntoks, device)
-            out = sampler.generate(sd, schedule, text_tokenizer=tok_text_obj,
-                                   verbose=False, seed=42)
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                mod_logits = model(mod_dict,
+                                   num_encoder_tokens=NUM_TOKENS,
+                                   num_decoder_tokens=NUM_TOKENS,
+                                   return_logits=True)
 
-            tokens = out[tok_mod]['ids'].squeeze(0).reshape(1, 14, 14)
-            dec    = tok_depth.decode_tokens(tokens, timesteps=args.divae_steps,
-                                             image_size=224, verbose=False)
-            pred   = dec.squeeze(0).squeeze(0).cpu()   # (224,224)
+            # mod_logits[TARGET_MOD]: shape (num_target_tokens, vocab_size)
+            # = (196, 8192) for a single sample
+            depth_logits = mod_logits[TARGET_MOD].float()        # (196, V)
+            pred_ids     = depth_logits.argmax(dim=-1)           # (196,)
+            pred_ids_2d  = pred_ids.reshape(1, 14, 14)           # (1, 14, 14)
+            gt_ids_2d    = gt_tokens.reshape(1, 14, 14).to(device)
 
-            ar = absrel(pred, gt_depth, valid)
+            # Decode both with DiVAE
+            pred_depth = tok_depth.decode_tokens(
+                pred_ids_2d, timesteps=args.divae_steps, image_size=224, verbose=False
+            ).squeeze().cpu()   # (224, 224)
+
+            gt_depth = tok_depth.decode_tokens(
+                gt_ids_2d, timesteps=args.divae_steps, image_size=224, verbose=False
+            ).squeeze().cpu()   # (224, 224)
+
+            valid = gt_depth > 0
+            if valid.sum() < 10:
+                print(f'  [skip] sample {idx}: too few valid GT pixels')
+                continue
+
+            ar = absrel(pred_depth, gt_depth, valid)
             abs_rels.append(ar)
 
         except Exception as e:
@@ -201,9 +237,9 @@ def main():
         tags    = ['overfit', 'diagnostic'],
     )
     wandb.define_metric('epoch')
-    wandb.define_metric('loss/*',    step_metric='epoch')
-    wandb.define_metric('lr',        step_metric='epoch')
-    wandb.define_metric('absrel/*',  step_metric='epoch')
+    wandb.define_metric('loss/*',   step_metric='epoch')
+    wandb.define_metric('lr',       step_metric='epoch')
+    wandb.define_metric('absrel/*', step_metric='epoch')
     print(f'WandB run: {run.url}')
 
     # ── Dataset & loader ──────────────────────────────────────────────────────
@@ -225,30 +261,30 @@ def main():
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f'  Trainable params: {n_params/1e6:.2f}M  (LoRA only)')
 
-    # ── Tokenizers for AbsRel eval ────────────────────────────────────────────
+    # ── Depth tokenizer for AbsRel eval ───────────────────────────────────────
     print('Loading depth tokenizer for AbsRel eval ...')
+    from fourm.vq.vqvae import DiVAE
     tok_depth = DiVAE.from_pretrained(args.tok_depth, cache_dir=args.hf_cache
                                       ).to(torch.bfloat16).to(device).eval()
-    tok_text  = Tokenizer.from_file(args.tok_text)
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
     lora_params = [p for p in model.parameters() if p.requires_grad]
     optimizer   = torch.optim.AdamW(lora_params, lr=args.lr,
-                                     weight_decay=args.weight_decay)
+                                    weight_decay=args.weight_decay)
     scaler = torch.cuda.amp.GradScaler()
 
     # ── Training ──────────────────────────────────────────────────────────────
     print(f'\nStarting overfit training: {args.epochs} epochs, {args.n_samples} samples\n')
-    baseline_absrel = None
+    avg_loss = float('nan')
 
     for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0.0
         n_batches  = 0
 
-        for batch in loader:
+        for rgb_tokens, depth_tokens in loader:
             optimizer.zero_grad()
-            loss = compute_ce_loss(model, batch, device)
+            loss = compute_ce_loss(model, rgb_tokens, depth_tokens, device)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(lora_params, 1.0)
@@ -259,8 +295,7 @@ def main():
 
         avg_loss = epoch_loss / max(n_batches, 1)
 
-        wandb.log({'epoch': epoch, 'loss/train': avg_loss,
-                   'lr': args.lr})
+        wandb.log({'epoch': epoch, 'loss/train': avg_loss, 'lr': args.lr})
 
         if epoch % 10 == 0 or epoch == args.epochs - 1:
             print(f'  epoch {epoch:3d}/{args.epochs} | CE loss = {avg_loss:.4f}')
@@ -269,31 +304,34 @@ def main():
     print('\n' + '='*55)
     print('AbsRel evaluation on overfit samples ...')
 
-    # Baseline (fresh model, no training)
-    print('  Running baseline (no LoRA weights loaded) ...')
-    fm_base = FM.from_pretrained(args.fm_model, cache_dir=args.hf_cache
-                                  ).to(torch.bfloat16).to(device).eval()
+    # Baseline: fresh model with no LoRA training
+    print('  Running baseline (fresh FM, no LoRA weights) ...')
+    fm_base = FM.from_pretrained(args.fm_model, cache_dir=args.hf_cache)
+    inject_trainable_LoRA(fm_base, rank=args.lora_rank, scale=args.lora_scale,
+                          target_replace_modules=target_mods)
+    fm_base = fm_base.to(torch.bfloat16).to(device).eval()
+
     base_absrel, n_eval = eval_absrel_on_samples(
-        fm_base, dataset, tok_depth, tok_text, device, args)
+        fm_base, dataset, tok_depth, device, args)
     del fm_base
     torch.cuda.empty_cache()
     print(f'  Baseline AbsRel: {base_absrel:.4f}  (n={n_eval})')
 
-    # LoRA fine-tuned
+    # LoRA fine-tuned model
     print('  Running LoRA fine-tuned model ...')
     lora_absrel, n_eval = eval_absrel_on_samples(
-        model, dataset, tok_depth, tok_text, device, args)
+        model, dataset, tok_depth, device, args)
     print(f'  LoRA AbsRel:     {lora_absrel:.4f}  (n={n_eval})')
 
     delta = lora_absrel - base_absrel
 
     # ── Log final results ─────────────────────────────────────────────────────
     wandb.log({
-        'epoch':                 args.epochs,
-        'absrel/baseline':       base_absrel,
-        'absrel/lora':           lora_absrel,
-        'absrel/delta':          delta,
-        'absrel/improved':       int(delta < 0),
+        'epoch':            args.epochs,
+        'absrel/baseline':  base_absrel,
+        'absrel/lora':      lora_absrel,
+        'absrel/delta':     delta,
+        'absrel/improved':  int(delta < 0),
     })
 
     # ── Print diagnostic summary ──────────────────────────────────────────────

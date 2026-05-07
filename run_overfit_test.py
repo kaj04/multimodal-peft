@@ -50,6 +50,7 @@ def get_args():
 
     # Overfit settings
     p.add_argument('--n_samples',    type=int,   default=50)
+    p.add_argument('--batch_size',   type=int,   default=4)
     p.add_argument('--epochs',       type=int,   default=200)
     p.add_argument('--lr',           type=float, default=2e-4)
     p.add_argument('--weight_decay', type=float, default=0.05)
@@ -246,7 +247,7 @@ def main():
     print(f'\nLoading {args.n_samples} overfit samples ...')
     dataset = NyuTokenDataset(args.data_path, args.n_samples, seed=args.seed)
     loader  = torch.utils.data.DataLoader(
-        dataset, batch_size=args.n_samples,   # single batch = all samples
+        dataset, batch_size=args.batch_size,
         shuffle=True, num_workers=4, pin_memory=True,
     )
 

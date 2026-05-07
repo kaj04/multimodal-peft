@@ -1,0 +1,48 @@
+# LoRA fine-tuning on NYUv2 depth estimation
+# Reduced config to address overfitting observed in r8/attention run:
+#   - rank 4  (was 8)  → halves parameters per module
+#   - selfattn only    → removes cross-attention LoRA (~1/3 fewer modules)
+#
+# Previous run (r8, attention) showed train CE ↓ but val CE flat → overfitting.
+# Single-step change: reduce capacity, keep LR identical for clean comparison.
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 4
+lora_scale: 1.0
+lora_modules: selfattn
+
+# Task
+task: depth
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+# Training — identical to r8 run for clean comparison
+epochs: 50
+batch_size: 2
+accum_iter: 8
+blr: 1.0e-4
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 5
+save_ckpt_freq: 10
+
+# Data
+data_path: '/scratch-shared/tesr125338/nyu_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
+num_workers: 8
+
+# Output — separate dir to preserve r8 checkpoints
+output_dir: 'output/depth/nyu_rgb_r4_selfattn'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_depth_nyu_r4_selfattn'

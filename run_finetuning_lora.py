@@ -125,6 +125,8 @@ def get_args():
     parser.add_argument('--warmup_epochs', default=5, type=int)
     parser.add_argument('--eval_freq', default=5, type=int,
                         help='Evaluate every N epochs')
+    parser.add_argument('--early_stop_patience', default=0, type=int,
+                        help='Stop training if val loss does not improve for N consecutive evals. 0 = disabled.')
     parser.add_argument('--save_ckpt_freq', default=10, type=int)
 
     # --- Data ---
@@ -172,10 +174,16 @@ def get_args():
     args.config_path = args_config.config
 
     # Derive target_mod from task
+    # target_mod must match the modality key in ml-4m/fourm/data/modality_info.py,
+    # and also determines the subfolder name on disk:
+    #   target_folder = target_mod.split('@')[0]
+    #   e.g. 'tok_depth@224' → 'tok_depth/', 'caption' → 'caption/'
     if args.task == 'semseg':
         args.target_mod = 'tok_semseg@224'
     elif args.task == 'depth':
         args.target_mod = 'tok_depth@224'
+    elif args.task == 'caption':
+        args.target_mod = 'caption'   # vocab 30k wordpiece, max_tokens 256, type 'seq'
     else:
         raise ValueError(f'Unknown task: {args.task}')
 
@@ -785,8 +793,11 @@ def main(args):
     # Training
     # -----------------------------------------------------------------------
     print(f'\nStarting LoRA fine-tuning for {args.epochs} epochs')
+    if args.early_stop_patience > 0:
+        print(f'Early stopping: patience={args.early_stop_patience} epochs')
     start_time = time.time()
     best_loss = float('inf')
+    patience_counter = 0
 
     for epoch in range(args.start_epoch if hasattr(args, 'start_epoch') else 0, args.epochs):
         if args.distributed:
@@ -822,8 +833,10 @@ def main(args):
             eval_stats = evaluate(model, data_loader_val, device, args, epoch=epoch)
 
             # Save best checkpoint (by val loss)
-            if eval_stats.get('loss', float('inf')) < best_loss:
-                best_loss = eval_stats['loss']
+            current_val_loss = eval_stats.get('loss', float('inf'))
+            if current_val_loss < best_loss:
+                best_loss = current_val_loss
+                patience_counter = 0
                 if args.output_dir and utils.is_main_process():
                     utils.save_model(
                         args=args, model=model, model_without_ddp=model_without_ddp,
@@ -832,6 +845,12 @@ def main(args):
                     # Also save compact LoRA-only weights for best checkpoint
                     save_lora_weights(model_without_ddp, args.output_dir, tag='best')
                 print(f'  New best val loss: {best_loss:.4f}')
+            else:
+                patience_counter += 1
+                print(f'  Val loss did not improve ({patience_counter}/{args.early_stop_patience})')
+                if args.early_stop_patience > 0 and patience_counter >= args.early_stop_patience:
+                    print(f'  Early stopping triggered at epoch {epoch}.')
+                    break
 
         # Log stats
         log_stats = {

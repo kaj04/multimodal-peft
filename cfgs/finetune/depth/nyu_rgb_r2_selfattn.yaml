@@ -1,0 +1,45 @@
+# LoRA fine-tuning on NYUv2 depth estimation
+# More aggressive regularisation to address overfitting seen in r4/selfattn run:
+#   - rank 2        (was 4)  → minimal adapter capacity
+#   - selfattn only          → unchanged
+#   - blr 1e-5      (was 1e-4) → 10x lower learning rate
+#   - weight_decay 0.1 (was 0.05) → stronger regularisation
+#   - warmup_epochs 10 (was 5)  → gentler ramp-up
+#   - early_stop_patience 3     → stop if val loss rises for 3 consecutive evals
+#
+# Goal: find the minimum LoRA config that achieves val loss improvement.
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+# LoRA
+lora_rank: 2
+lora_scale: 1.0
+lora_modules: selfattn
+# Task
+task: depth
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+# Training
+epochs: 50
+batch_size: 2
+accum_iter: 8
+blr: 1.0e-5
+min_blr: 0.0
+weight_decay: 0.1
+clip_grad: 1.0
+warmup_epochs: 10
+early_stop_patience: 3
+eval_freq: 1
+save_ckpt_freq: 10
+# Data
+data_path: '/scratch-shared/tesr125338/nyu_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
+num_workers: 8
+# Output
+output_dir: 'output/depth/nyu_rgb_r2_selfattn'
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_depth_nyu_r2_selfattn'

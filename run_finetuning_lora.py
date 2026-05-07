@@ -49,6 +49,7 @@ from typing import Dict, Iterable, Optional
 
 import numpy as np
 import torch
+import wandb
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from torch import nn
@@ -763,6 +764,13 @@ def main(args):
     # WandB logger
     # -----------------------------------------------------------------------
     log_writer = utils.WandbLogger(args) if (global_rank == 0 and args.log_wandb) else None
+    if log_writer is not None:
+        # epoch as x-axis → all charts use epoch not internal step
+        wandb.define_metric('epoch')
+        wandb.define_metric('loss/*',    step_metric='epoch')
+        wandb.define_metric('lr',        step_metric='epoch')
+        wandb.define_metric('grad_norm', step_metric='epoch')
+        wandb.define_metric('val/*',     step_metric='epoch')
 
     # -----------------------------------------------------------------------
     # Eval only
@@ -834,12 +842,19 @@ def main(args):
             'lora_modules': args.lora_modules,
         }
         if log_writer is not None:
-            log_writer.update(log_stats)
+            # WandB: remap to grouped metric names so train+val loss appear
+            # on the same chart (loss/*), with epoch as x-axis
+            wandb_stats = {
+                'epoch':            epoch,
+                'loss/train':       train_stats.get('loss', 0),
+                'loss/depth_train': train_stats.get('loss_tok_depth@224', 0),
+                'lr':               train_stats.get('lr', 0),
+                'grad_norm':        train_stats.get('grad_norm', 0),
+            }
             if eval_stats:
-                log_writer.update({
-                    'val/loss':      eval_stats.get('loss', 0),
-                    'val/token_acc': eval_stats.get('token_acc', 0),
-                })
+                wandb_stats['loss/val']      = eval_stats.get('loss', 0)
+                wandb_stats['val/token_acc'] = eval_stats.get('token_acc', 0)
+            log_writer.update(wandb_stats)
         if args.output_dir and utils.is_main_process():
             with open(os.path.join(args.output_dir, 'log.txt'), 'a') as f:
                 f.write(json.dumps(log_stats) + '\n')

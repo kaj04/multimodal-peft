@@ -22,9 +22,6 @@ eval "$(conda shell.bash hook)"
 conda activate 4m-peft
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
-export WANDB_API_KEY=$(grep password ~/.netrc | awk '{print $2}')
-export WANDB_PROJECT="4m-peft"
-export WANDB_MODE=offline   # compute nodes can't reach api.wandb.ai — sync after job
 REPO_ROOT="$HOME/4m-peft"
 
 mkdir -p logs
@@ -38,6 +35,10 @@ OMP_NUM_THREADS=1 torchrun \
     --master_port=29501 \
     run_finetuning_lora.py \
     --config cfgs/finetune/depth/nyu_rgb_r8.yaml \
-    --dist_eval
+    --dist_eval \
+    --log_wandb \
+    --wandb_project 4M-PEFT \
+    --wandb_entity francesco-colasurdo04-eindhoven-university-of-technology \
+    --wandb_run_name lora_depth_nyu_r8
 
 echo "Training complete. Checkpoints in: output/depth/nyu_rgb_r8/"

@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, 'ml-4m'))
 
 import fourm.utils as utils
 from fourm.models.fm import FM
-from fourm.models.lora_utils import inject_trainable_LoRA, get_LoRA_module_names
+from fourm.models.lora_utils import inject_trainable_LoRA, get_LoRA_module_names, unfreeze_all_LoRA_layers
 
 # ── Config ────────────────────────────────────────────────────────────────────
 INPUT_MOD      = 'tok_rgb@224'
@@ -256,6 +256,9 @@ def main():
     target_mods = get_LoRA_module_names(args.lora_modules)
     inject_trainable_LoRA(model, rank=args.lora_rank, scale=args.lora_scale,
                           target_replace_modules=target_mods)
+    for param in model.parameters():
+        param.requires_grad = False
+    unfreeze_all_LoRA_layers(model)
     model = model.to(torch.bfloat16).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -309,6 +312,9 @@ def main():
     fm_base = FM.from_pretrained(args.fm_model, cache_dir=args.hf_cache)
     inject_trainable_LoRA(fm_base, rank=args.lora_rank, scale=args.lora_scale,
                           target_replace_modules=target_mods)
+    for param in fm_base.parameters():
+        param.requires_grad = False
+    unfreeze_all_LoRA_layers(fm_base)
     fm_base = fm_base.to(torch.bfloat16).to(device).eval()
 
     base_absrel, n_eval = eval_absrel_on_samples(

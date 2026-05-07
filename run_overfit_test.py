@@ -275,7 +275,8 @@ def main():
     lora_params = [p for p in model.parameters() if p.requires_grad]
     optimizer   = torch.optim.AdamW(lora_params, lr=args.lr,
                                     weight_decay=args.weight_decay)
-    scaler = torch.cuda.amp.GradScaler()
+    # NOTE: GradScaler is for float16 only — bfloat16 has float32 exponent
+    # range so no scaling is needed. Just use autocast + plain backward.
 
     # ── Training ──────────────────────────────────────────────────────────────
     print(f'\nStarting overfit training: {args.epochs} epochs, {args.n_samples} samples\n')
@@ -289,11 +290,9 @@ def main():
         for rgb_tokens, depth_tokens in loader:
             optimizer.zero_grad()
             loss = compute_ce_loss(model, rgb_tokens, depth_tokens, device)
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(lora_params, 1.0)
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             epoch_loss += loss.item()
             n_batches  += 1
 

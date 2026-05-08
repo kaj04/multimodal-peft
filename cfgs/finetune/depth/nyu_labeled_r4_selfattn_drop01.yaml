@@ -31,7 +31,7 @@ loss_type: mod
 # Training
 epochs: 50
 batch_size: 2
-accum_iter: 8
+accum_iter: 4
 blr: 1.0e-4
 min_blr: 0.0
 weight_decay: 0.05

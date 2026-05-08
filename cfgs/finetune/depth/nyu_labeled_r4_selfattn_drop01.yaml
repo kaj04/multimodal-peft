@@ -1,0 +1,56 @@
+# LoRA fine-tuning on NYUv2 depth — LABELED split (795 train / 654 val)
+#
+# Key difference vs nyu_rgb_r4_selfattn_drop01.yaml:
+#   data_path → nyu_tokens_labeled/  (post-processed depth, matches val distribution)
+#
+# Why this matters:
+#   Previous runs trained on 47k raw WebDataset video frames (raw Kinect depth)
+#   and validated on 654 labeled frames (post-processed depth). This creates a
+#   depth quality mismatch. Using the labeled split eliminates it and matches
+#   the MultiMAE / 4M-21 paper recipe exactly.
+#
+# Tradeoff: 795 train samples instead of 47k. Less data but correct data.
+# MultiMAE trains for 2000 epochs on this split — we use 50 with early stopping.
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 4
+lora_scale: 1.0
+lora_modules: selfattn
+lora_dropout: 0.1
+
+# Task
+task: depth
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+# Training
+epochs: 50
+batch_size: 2
+accum_iter: 8
+blr: 1.0e-4
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 1
+save_ckpt_freq: 10
+early_stop_patience: 5
+
+# Data — labeled split, correct distribution
+data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/val'
+num_workers: 4
+
+# Output
+output_dir: 'output/depth/nyu_labeled_r4_selfattn_drop01'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_depth_nyu_labeled_r4_selfattn_drop01'

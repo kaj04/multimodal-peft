@@ -32,7 +32,7 @@ min_blr: 0.0
 weight_decay: 0.05
 clip_grad: 1.0
 warmup_epochs: 5
-eval_freq: 5
+eval_freq: 1
 save_ckpt_freq: 10
 early_stop_patience: 5
 

@@ -448,12 +448,16 @@ def train_one_epoch(
                 loss_type=args.loss_type,
             )
 
-        loss_value = loss.item()
+        # loss       = total loss averaged over ALL token positions (encoder + decoder)
+        #              → equals target_mod_loss / 2 when num_encoder == num_decoder tokens
+        # target_loss = loss on target modality tokens only → comparable with val loss
+        target_loss_value = mod_loss[args.target_mod].item()
+        loss_value        = loss.item()
         if not math.isfinite(loss_value):
             print(f'Loss is {loss_value}, stopping training.')
             sys.exit(1)
 
-        # Gradient accumulation
+        # Gradient accumulation (use total loss for backward — correct signal)
         loss = loss / args.accum_iter
         grad_norm = loss_scaler(
             loss, optimizer,
@@ -466,8 +470,8 @@ def train_one_epoch(
 
         torch.cuda.synchronize()
 
-        # Logging
-        metric_logger.update(loss=loss_value)
+        # Logging — use target_loss for 'loss' so train/val are on the same scale
+        metric_logger.update(loss=target_loss_value)
         metric_logger.update(lr=optimizer.param_groups[0]['lr'])
         if grad_norm is not None:
             metric_logger.update(grad_norm=grad_norm)
@@ -476,10 +480,11 @@ def train_one_epoch(
 
         if log_writer is not None and (step + 1) % args.accum_iter == 0:
             log_writer.update({
-                'train/loss': loss_value,
-                'train/lr': optimizer.param_groups[0]['lr'],
-                'train/grad_norm': grad_norm if grad_norm is not None else 0.0,
-                'train/step': it,
+                'train/loss':       target_loss_value,   # target-mod CE, matches val scale
+                'train/loss_total': loss_value,          # total loss (encoder+decoder avg)
+                'train/lr':         optimizer.param_groups[0]['lr'],
+                'train/grad_norm':  grad_norm if grad_norm is not None else 0.0,
+                'train/step':       it,
             })
 
     # Gather stats from all processes

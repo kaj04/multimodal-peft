@@ -1,0 +1,55 @@
+# LoRA fine-tuning on NYUv2 depth — LABELED split (795 train / 654 val)
+#
+# Changes vs nyu_labeled_r4_selfattn_drop01.yaml:
+#   - lora_rank: 8    (was 4)   — paper-standard for 4M-21 XL
+#   - lora_dropout: 0.05        (was 0.1) — less restrictive regularization
+#   - blr: 5e-5                 (was 1e-4) — halves effective LR to ~6.25e-6,
+#                                             stabilizes oscillating grad norm
+#
+# Motivation: r4/drop01 run showed train=6.6, val=7.2 at epoch 13 with
+# oscillating grad norm and val plateau → model near capacity limit and LR
+# slightly too high. More capacity + less dropout + lower LR should allow
+# smoother convergence.
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: selfattn
+lora_dropout: 0.05
+
+# Task
+task: depth
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+# Training
+epochs: 50
+batch_size: 2
+accum_iter: 4
+blr: 5.0e-5
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 1
+save_ckpt_freq: 10
+early_stop_patience: 5
+
+# Data — labeled split, correct distribution
+data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/val'
+num_workers: 4
+
+# Output
+output_dir: '/scratch-shared/tesr125338/output/depth/nyu_labeled_r8_selfattn_drop005'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_depth_nyu_labeled_r8_selfattn_drop005'

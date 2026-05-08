@@ -1,0 +1,48 @@
+# LoRA fine-tuning on COCO captioning (RGB → text)
+#
+# Config mirrors the original depth run (r8, attention) to enable fair cross-task comparison.
+# Same LoRA capacity, same effective batch size, same LR schedule.
+# Task difference: target is 'caption' (wordpiece seq, vocab 30k) vs 'tok_depth@224' (VQ img, vocab 16k).
+#
+# Paper metrics: CIDEr-D and BLEU@4 (computed by eval_caption.py after training).
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA — identical to depth r8/attention run for cross-task comparison
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: attention
+
+# Task
+task: caption
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 64     # wordpiece tokens per caption (max; avg COCO caption ~15 wp tokens)
+loss_type: mod
+
+# Training — identical to depth r8 run
+epochs: 50
+batch_size: 2
+accum_iter: 8
+blr: 1.0e-4
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 5
+save_ckpt_freq: 10
+
+# Data
+data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+num_workers: 8
+
+# Output
+output_dir: 'output/caption/coco_rgb_r8_attention'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_caption_coco_r8_attention'

@@ -1,0 +1,51 @@
+# LoRA fine-tuning on NYUv2 depth estimation
+# Adds LoRA dropout to address overfitting observed in r4/selfattn run.
+#
+# Change vs nyu_rgb_r4_selfattn.yaml:
+#   - lora_dropout: 0.1   ← dropout between lora_down and lora_up (new)
+#   - early_stop_patience: 5  ← tolerate up to 5 consecutive eval epochs without improvement
+#
+# Everything else identical for clean single-variable comparison.
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 4
+lora_scale: 1.0
+lora_modules: selfattn
+lora_dropout: 0.1
+
+# Task
+task: depth
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+# Training
+epochs: 50
+batch_size: 2
+accum_iter: 8
+blr: 1.0e-4
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 5
+save_ckpt_freq: 10
+early_stop_patience: 5
+
+# Data
+data_path: '/scratch-shared/tesr125338/nyu_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
+num_workers: 8
+
+# Output
+output_dir: 'output/depth/nyu_rgb_r4_selfattn_drop01'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_depth_nyu_r4_selfattn_drop01'

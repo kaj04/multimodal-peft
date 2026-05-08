@@ -65,6 +65,7 @@ from fourm.models.lora_utils import (
     unfreeze_all_LoRA_layers,
 )
 from fourm.utils import NativeScalerWithGradNormCount as NativeScaler
+from lora_dropout import add_lora_dropout
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +87,8 @@ def get_args():
     parser.add_argument('--lora_modules', default='attention', type=str,
                         choices=['selfattn', 'crossattn', 'attention', 'mlp', 'all'],
                         help='Which transformer sub-modules to apply LoRA to')
+    parser.add_argument('--lora_dropout', default=0.0, type=float,
+                        help='Dropout probability between lora_down and lora_up (0.0 = disabled)')
 
     # --- Model ---
     parser.add_argument('--pretrained_model', default='EPFL-VILAB/4M-21_XL', type=str,
@@ -324,14 +327,17 @@ def get_model(args) -> nn.Module:
 
     # Determine which transformer sub-modules to inject LoRA into
     target_modules = get_LoRA_module_names(args.lora_modules)
-    print(f'Injecting LoRA (rank={args.lora_rank}, scale={args.lora_scale}) '
-          f'into modules: {target_modules}')
+    print(f'Injecting LoRA (rank={args.lora_rank}, scale={args.lora_scale}, '
+          f'dropout={args.lora_dropout}) into modules: {target_modules}')
     inject_trainable_LoRA(
         model,
         rank=args.lora_rank,
         scale=args.lora_scale,
         target_replace_modules=target_modules,
     )
+    if args.lora_dropout > 0.0:
+        n_patched = add_lora_dropout(model, p=args.lora_dropout)
+        print(f'  Added dropout={args.lora_dropout} to {n_patched} LoRAWrapper layers')
 
     # Freeze everything; then unfreeze LoRA params
     for param in model.parameters():

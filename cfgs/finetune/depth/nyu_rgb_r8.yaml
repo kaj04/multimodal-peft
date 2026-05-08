@@ -38,7 +38,7 @@ eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
 num_workers: 8
 
 # Output
-output_dir: 'output/depth/nyu_rgb_r8'
+output_dir: '/scratch-shared/tesr125338/output/depth/nyu_rgb_r8'
 
 # Logging
 # W&B disabled — sync issues on Snellius not yet resolved.

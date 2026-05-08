@@ -39,7 +39,7 @@ eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
 num_workers: 8
 
 # Output — separate dir to preserve r8 checkpoints
-output_dir: 'output/depth/nyu_rgb_r4_selfattn'
+output_dir: '/scratch-shared/tesr125338/output/depth/nyu_rgb_r4_selfattn'
 
 # WandB
 log_wandb: true

@@ -39,7 +39,7 @@ eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
 num_workers: 8
 
 # Output
-output_dir: 'output/caption/coco_rgb_r8_attention'
+output_dir: '/scratch-shared/tesr125338/output/caption/coco_rgb_r8_attention'
 
 # WandB
 log_wandb: true

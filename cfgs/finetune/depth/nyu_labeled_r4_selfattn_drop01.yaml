@@ -47,7 +47,7 @@ eval_data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/val'
 num_workers: 4
 
 # Output
-output_dir: 'output/depth/nyu_labeled_r4_selfattn_drop01'
+output_dir: '/scratch-shared/tesr125338/output/depth/nyu_labeled_r4_selfattn_drop01'
 
 # WandB
 log_wandb: true

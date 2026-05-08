@@ -36,7 +36,7 @@ eval_data_path: '/scratch-shared/tesr125338/ade20k_tokens/val'
 num_workers: 8
 
 # Output
-output_dir: 'output/semseg/ade20k_rgb_r64'
+output_dir: '/scratch-shared/tesr125338/output/semseg/ade20k_rgb_r64'
 
 # Logging
 log_wandb: false

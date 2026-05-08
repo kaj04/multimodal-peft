@@ -29,7 +29,7 @@ data_path: '/scratch-shared/tesr125338/nyu_tokens/train'
 eval_data_path: '/scratch-shared/tesr125338/nyu_tokens/val'
 num_workers: 8
 
-output_dir: 'output/depth/nyu_rgb_r64'
+output_dir: '/scratch-shared/tesr125338/output/depth/nyu_rgb_r64'
 
 log_wandb: false
 wandb_project: '4m-peft'

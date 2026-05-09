@@ -5,15 +5,9 @@
 #
 # **Grid**: N rows × 4 columns
 #   - Col 1: RGB image (from COCO val2017)
-#   - Col 2: GT captions (from `captions_val2017.json`, one shown per image)
+#   - Col 2: GT caption (from `captions_val2017.json`)
 #   - Col 3: Baseline caption (4M-21 XL, no LoRA)
 #   - Col 4: LoRA caption (run 15: rank=8, selfattn, trained on NYUv2 depth)
-#
-# **Metrics** (official COCO captioning evaluation via `pycocoevalcap`):
-#   - CIDEr   consensus-based image description evaluation   ↑ higher is better
-#   - BLEU@4  4-gram precision                               ↑ higher is better
-#   - ROUGE_L longest common subsequence                     ↑ higher is better
-#   - METEOR  unigram F-score with synonyms                  ↑ higher is better
 #
 # **Dataset**: COCO val2017 — 5000 images, 5 GT captions each
 #   Images  : `/scratch-shared/tesr125338/coco/val2017/`
@@ -35,15 +29,6 @@ REPO_ROOT = os.path.expanduser('~/4m-peft')
 os.chdir(REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, 'ml-4m'))
 
-# pip_packages installed on scratch (pycocoevalcap, pycocotools, nltk)
-PIP_PACKAGES = '/scratch-shared/tesr125338/pip_packages'
-NLTK_DATA    = '/scratch-shared/tesr125338/nltk_data'
-if PIP_PACKAGES not in sys.path:
-    sys.path.append(PIP_PACKAGES)   # append: conda numpy stays first
-
-import nltk
-nltk.data.path.append(NLTK_DATA)
-
 # ── Paths ─────────────────────────────────────────────────────────────────────
 COCO_ROOT    = '/scratch-shared/tesr125338/coco/val2017'
 COCO_ANN     = '/scratch-shared/tesr125338/coco/annotations/captions_val2017.json'
@@ -56,9 +41,8 @@ os.makedirs(FIGURES_DIR, exist_ok=True)
 LORA_RANK    = 8
 LORA_MODULES = 'selfattn'
 
-# ── Evaluation ────────────────────────────────────────────────────────────────
+# ── Visualisation ─────────────────────────────────────────────────────────────
 N_VIZ        = 10      # rows in the visual grid
-N_METRICS    = 200     # images for CIDEr/BLEU (more = more reliable IDF weights)
 SEED         = 42
 
 # ── Caption generation params (same as eval_caption_forgetting.py) ─────────────
@@ -207,11 +191,10 @@ print(f'COCO val2017 samples on disk: {len(all_samples)}')
 
 # Fixed subset for reproducibility
 rng = np.random.default_rng(SEED)
-indices = rng.choice(len(all_samples), size=max(N_VIZ, N_METRICS), replace=False)
+indices = rng.choice(len(all_samples), size=N_VIZ, replace=False)
 indices.sort()
-viz_samples     = [all_samples[i] for i in indices[:N_VIZ]]
-metrics_samples = [all_samples[i] for i in indices[:N_METRICS]]
-print(f'Viz samples: {N_VIZ}  |  Metrics samples: {N_METRICS}')
+viz_samples = [all_samples[i] for i in indices]
+print(f'Viz samples: {N_VIZ}')
 
 # %% [markdown]
 # ## Phase 1 — Baseline inference
@@ -224,7 +207,7 @@ sampler = GenerationSampler(fm)
 print(f'FM ready ({sum(p.numel() for p in fm.parameters())/1e6:.0f}M params)')
 
 captions_baseline = {}    # image_id → generated caption string
-for s in tqdm(metrics_samples, desc='Baseline'):
+for s in tqdm(viz_samples, desc='Baseline'):
     try:
         rgb_t = load_rgb_tensor(s['path'])
         with torch.no_grad():
@@ -253,7 +236,7 @@ fm = fm.to(device=DEVICE, dtype=DTYPE).eval()
 sampler = GenerationSampler(fm)
 
 captions_lora = {}        # image_id → generated caption string
-for s in tqdm(metrics_samples, desc='LoRA r8/selfattn'):
+for s in tqdm(viz_samples, desc='LoRA r8/selfattn'):
     try:
         rgb_t = load_rgb_tensor(s['path'])
         with torch.no_grad():
@@ -268,76 +251,23 @@ torch.cuda.empty_cache()
 print(f'LoRA done. {len(captions_lora)} captions generated.')
 
 # %% [markdown]
-# ## Metrics — official COCO evaluation (pycocoevalcap)
-# CIDEr, BLEU@4, ROUGE_L, METEOR computed with the official COCO toolkit.
-# Same library used by the COCO leaderboard — not invented formulas.
-
-# %%
-from pycocotools.coco import COCO
-from pycocoevalcap.eval import COCOEvalCap
-
-eval_ids = list(captions_baseline.keys())
-
-def run_coco_eval(captions_dict, ann_file, image_ids, label):
-    predictions = [{'image_id': iid, 'caption': cap}
-                   for iid, cap in captions_dict.items()
-                   if iid in set(image_ids)]
-
-    # Monkey-patch SPICE BEFORE creating COCOEvalCap.
-    # The conda version stores scorers as a local var inside evaluate()
-    # (not an instance attribute) → filtering evaluator.scorers raises
-    # AttributeError. Patching the class is version-agnostic.
-    try:
-        from pycocoevalcap.spice.spice import Spice
-        Spice.compute_score = lambda self, gts, res: (0.0, [0.0] * len(res))
-    except Exception:
-        pass  # SPICE not installed — nothing to patch
-
-    coco_gt   = COCO(ann_file)
-    coco_dt   = coco_gt.loadRes(predictions)
-    evaluator = COCOEvalCap(coco_gt, coco_dt)
-    evaluator.params['image_id'] = image_ids
-    evaluator.evaluate()
-    evaluator.eval.pop('SPICE', None)   # remove patched zero value
-
-    print(f'\n[{label}]')
-    for k, v in evaluator.eval.items():
-        print(f'  {k:<12}: {v:.4f}')
-    return evaluator.eval
-
-print('Running COCO evaluation ...\n')
-metrics_base = run_coco_eval(captions_baseline, COCO_ANN, eval_ids, 'Baseline')
-metrics_lora = run_coco_eval(captions_lora,     COCO_ANN, eval_ids, 'LoRA r8/selfattn')
-
-print(f'\n{"Metric":<12} {"Baseline":>12} {"LoRA r8":>12} {"Δ":>10}')
-print('─' * 50)
-for k in ['CIDEr', 'Bleu_4', 'ROUGE_L', 'METEOR']:
-    b = metrics_base.get(k, float('nan'))
-    l = metrics_lora.get(k, float('nan'))
-    arrow = '↓ forget' if (l - b) < -0.02 else ('≈ ok' if abs(l - b) < 0.02 else '↑')
-    print(f'{k:<12} {b:>12.4f} {l:>12.4f} {l-b:>+10.4f}  {arrow}')
-print(f'\nN = {len(eval_ids)} images  |  toolkit: pycocoevalcap (official COCO)')
-
-# %% [markdown]
 # ## Visual grid
 # Each row: RGB image | GT caption | Baseline caption | LoRA caption
 
 # %%
-def wrap(text, width=28):
+def wrap(text, width=32):
     """Wrap text for display in a narrow matplotlib cell."""
     return '\n'.join(textwrap.wrap(str(text), width=width))
 
 
 n_rows   = N_VIZ
-fig_w    = 20
-fig_h    = n_rows * 2.8
-fig, axes = plt.subplots(n_rows, 4, figsize=(fig_w, fig_h))
+fig, axes = plt.subplots(n_rows, 4, figsize=(20, n_rows * 2.8))
 
 col_titles = [
     'RGB\n(COCO val2017)',
-    'GT Caption\n(from captions_val2017.json)',
-    f'Baseline\nCIDEr={metrics_base.get("CIDEr", 0):.3f}  BLEU@4={metrics_base.get("Bleu_4", 0):.3f}',
-    f'LoRA r8/selfattn\nCIDEr={metrics_lora.get("CIDEr", 0):.3f}  BLEU@4={metrics_lora.get("Bleu_4", 0):.3f}',
+    'GT Caption\n(captions_val2017.json)',
+    'Baseline\n(4M-21 XL, no LoRA)',
+    'LoRA r8/selfattn\n(depth FT, run 15)',
 ]
 for col, title in enumerate(col_titles):
     axes[0, col].set_title(title, fontsize=9, fontweight='bold', pad=6)
@@ -346,7 +276,7 @@ for row, s in enumerate(viz_samples):
     iid = s['image_id']
     rgb_np  = load_rgb_display(s['path'])
     gt_caps = id2captions.get(iid, ['N/A'])
-    gt_show = gt_caps[0]                             # show first GT caption
+    gt_show = gt_caps[0]
     cap_b   = captions_baseline.get(iid, '')
     cap_l   = captions_lora.get(iid, '')
 
@@ -362,7 +292,7 @@ for row, s in enumerate(viz_samples):
     ], start=1):
         ax = axes[row, col]
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
-        ax.text(0.05, 0.95, wrap(text, width=32),
+        ax.text(0.05, 0.95, wrap(text),
                 va='top', ha='left', fontsize=8,
                 color=color, wrap=True,
                 transform=ax.transAxes,
@@ -382,11 +312,8 @@ fig.legend(handles=legend_patches, loc='lower center', ncol=3, fontsize=9,
            bbox_to_anchor=(0.5, -0.01))
 
 fig.suptitle(
-    f'COCO val2017 — Caption Forgetting: 4M-21 XL Baseline vs LoRA r8/selfattn (depth FT)\n'
-    f'Metrics (N={len(eval_ids)}, pycocoevalcap official):  '
-    f'Baseline CIDEr={metrics_base.get("CIDEr",0):.4f}  BLEU@4={metrics_base.get("Bleu_4",0):.4f}  |  '
-    f'LoRA CIDEr={metrics_lora.get("CIDEr",0):.4f}  BLEU@4={metrics_lora.get("Bleu_4",0):.4f}',
-    fontsize=10, y=1.01,
+    'COCO val2017 — Caption Forgetting: 4M-21 XL Baseline vs LoRA r8/selfattn (depth FT)',
+    fontsize=11, fontweight='bold', y=1.005,
 )
 plt.tight_layout()
 

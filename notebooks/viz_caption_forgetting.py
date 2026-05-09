@@ -286,6 +286,12 @@ def run_coco_eval(captions_dict, ann_file, image_ids, label):
     coco_dt   = coco_gt.loadRes(predictions)
     evaluator = COCOEvalCap(coco_gt, coco_dt)
     evaluator.params['image_id'] = image_ids
+    # Remove SPICE — requires Java, not available on GPU nodes
+    evaluator.scorers = [
+        (scorer, method)
+        for scorer, method in evaluator.scorers
+        if 'Spice' not in type(scorer).__name__
+    ]
     evaluator.evaluate()
     print(f'\n[{label}]')
     for k, v in evaluator.eval.items():

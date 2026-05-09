@@ -234,6 +234,13 @@ def evaluate_captions(ann_file, predictions, image_ids):
     coco_dt  = coco_gt.loadRes(predictions)
     evaluator = COCOEvalCap(coco_gt, coco_dt)
     evaluator.params['image_id'] = list(image_ids)
+    # Remove SPICE scorer — requires Java, not available on GPU nodes.
+    # CIDEr, BLEU@4, ROUGE_L, METEOR are pure Python and sufficient.
+    evaluator.scorers = [
+        (scorer, method)
+        for scorer, method in evaluator.scorers
+        if 'Spice' not in type(scorer).__name__
+    ]
     evaluator.evaluate()
     return evaluator.eval   # dict: {'Bleu_1': ..., 'Bleu_4': ..., 'CIDEr': ..., ...}
 

@@ -10,7 +10,8 @@
 #   sbatch scripts/snellius/00_test_wandb.sh
 # =============================================================================
 #SBATCH --job-name=wandb_test
-#SBATCH --partition=rome
+#SBATCH --partition=gpu_a100
+#SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
@@ -29,7 +30,6 @@ cd "$REPO_ROOT"
 mkdir -p logs
 
 # ── WandB offline mode (compute nodes have no internet) ───────────────────────
-export WANDB_MODE=offline
 export WANDB_API_KEY=$(grep password ~/.netrc | awk '{print $2}')   # see setup instructions below
 export WANDB_PROJECT="4M-PEFT"
 

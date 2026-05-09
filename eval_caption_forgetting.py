@@ -230,18 +230,27 @@ def evaluate_captions(ann_file, predictions, image_ids):
     from pycocotools.coco import COCO
     from pycocoevalcap.eval import COCOEvalCap
 
-    coco_gt  = COCO(ann_file)
-    coco_dt  = coco_gt.loadRes(predictions)
+    # Monkey-patch SPICE BEFORE creating COCOEvalCap so it is never called.
+    # This works regardless of pycocoevalcap version: the conda version stores
+    # scorers as a local variable inside evaluate() (not an instance attribute),
+    # so filtering evaluator.scorers after construction raises AttributeError.
+    # Patching the class method is version-agnostic.
+    try:
+        from pycocoevalcap.spice.spice import Spice
+        Spice.compute_score = lambda self, gts, res: (0.0, [0.0] * len(res))
+        print('  [SPICE] monkey-patched — skipping Java dependency')
+    except Exception as _e:
+        print(f'  [SPICE] not found / already absent ({_e})')
+
+    coco_gt   = COCO(ann_file)
+    coco_dt   = coco_gt.loadRes(predictions)
     evaluator = COCOEvalCap(coco_gt, coco_dt)
     evaluator.params['image_id'] = list(image_ids)
-    # Remove SPICE scorer — requires Java, not available on GPU nodes.
-    # CIDEr, BLEU@4, ROUGE_L, METEOR are pure Python and sufficient.
-    evaluator.scorers = [
-        (scorer, method)
-        for scorer, method in evaluator.scorers
-        if 'Spice' not in type(scorer).__name__
-    ]
     evaluator.evaluate()
+
+    # Drop the patched SPICE entry (its value is 0.0 — meaningless)
+    evaluator.eval.pop('SPICE', None)
+
     return evaluator.eval   # dict: {'Bleu_1': ..., 'Bleu_4': ..., 'CIDEr': ..., ...}
 
 
@@ -354,12 +363,99 @@ def build_summary(args, metrics_base, metrics_lora, n_images, elapsed_base, elap
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Pre-run validation — catches all common errors before model loading
+# ─────────────────────────────────────────────────────────────────────────────
+
+def validate_environment(args):
+    """
+    Run fast sanity checks before the 30-min model loading + inference.
+    Raises SystemExit on any critical failure so the SLURM job fails early.
+    """
+    errors = []
+
+    # 1. COCO data paths
+    if not os.path.isdir(args.coco_root):
+        errors.append(f'COCO image dir not found: {args.coco_root}')
+    if not os.path.isfile(args.coco_ann):
+        errors.append(f'COCO annotation file not found: {args.coco_ann}')
+
+    # 2. LoRA weights
+    if args.lora_weights and not os.path.isfile(args.lora_weights):
+        errors.append(f'LoRA weights not found: {args.lora_weights}')
+
+    # 3. Text tokenizer
+    tok_path = args.tok_text
+    if not os.path.isabs(tok_path):
+        tok_path = os.path.join(_REPO_ROOT, tok_path)
+    if not os.path.isfile(tok_path):
+        errors.append(f'Text tokenizer not found: {tok_path}')
+
+    # 4. Key Python imports
+    missing_pkgs = []
+    for pkg in ['pycocotools.coco', 'pycocoevalcap.eval', 'nltk']:
+        try:
+            __import__(pkg)
+        except ImportError:
+            missing_pkgs.append(pkg)
+    if missing_pkgs:
+        errors.append(f'Missing Python packages: {missing_pkgs}')
+
+    # 5. SPICE monkey-patch test (verify it doesn't raise before evaluate())
+    try:
+        from pycocoevalcap.spice.spice import Spice
+        Spice.compute_score = lambda self, gts, res: (0.0, [0.0] * len(res))
+    except Exception:
+        pass  # OK — SPICE just won't be patched (may cause Java error later)
+
+    # 6. NLTK punkt tokenizer
+    try:
+        import nltk
+        nltk.tokenize.word_tokenize('hello world')
+    except Exception as e:
+        errors.append(f'NLTK punkt not available: {e} — run: '
+                      f'python -c "import nltk; nltk.download(\'punkt_tab\')"')
+
+    # 7. Output dir writeable
+    try:
+        os.makedirs(args.output_dir, exist_ok=True)
+        test_file = os.path.join(args.output_dir, '.write_test')
+        with open(test_file, 'w') as f:
+            f.write('ok')
+        os.remove(test_file)
+    except Exception as e:
+        errors.append(f'Output dir not writeable ({args.output_dir}): {e}')
+
+    # 8. GPU available
+    if args.device == 'cuda' and not torch.cuda.is_available():
+        errors.append('CUDA requested but torch.cuda.is_available() == False')
+
+    # ── Report ────────────────────────────────────────────────────────────────
+    print('\n── Pre-run validation ──────────────────────────────────────────────')
+    if errors:
+        print('  FAILED:')
+        for e in errors:
+            print(f'    ✗ {e}')
+        print('───────────────────────────────────────────────────────────────────\n')
+        sys.exit(1)
+    else:
+        print('  All checks passed ✓')
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_mem  = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f'  GPU: {gpu_name}  ({gpu_mem:.1f} GB VRAM)')
+        print('───────────────────────────────────────────────────────────────────\n')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # ── Fail fast: validate everything before loading the 9GB model ──────────
+    validate_environment(args)
 
     device      = torch.device(args.device)
     dtype_torch = torch.bfloat16 if args.dtype == 'bfloat16' else torch.float32

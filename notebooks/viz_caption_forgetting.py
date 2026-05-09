@@ -282,17 +282,24 @@ def run_coco_eval(captions_dict, ann_file, image_ids, label):
     predictions = [{'image_id': iid, 'caption': cap}
                    for iid, cap in captions_dict.items()
                    if iid in set(image_ids)]
+
+    # Monkey-patch SPICE BEFORE creating COCOEvalCap.
+    # The conda version stores scorers as a local var inside evaluate()
+    # (not an instance attribute) → filtering evaluator.scorers raises
+    # AttributeError. Patching the class is version-agnostic.
+    try:
+        from pycocoevalcap.spice.spice import Spice
+        Spice.compute_score = lambda self, gts, res: (0.0, [0.0] * len(res))
+    except Exception:
+        pass  # SPICE not installed — nothing to patch
+
     coco_gt   = COCO(ann_file)
     coco_dt   = coco_gt.loadRes(predictions)
     evaluator = COCOEvalCap(coco_gt, coco_dt)
     evaluator.params['image_id'] = image_ids
-    # Remove SPICE — requires Java, not available on GPU nodes
-    evaluator.scorers = [
-        (scorer, method)
-        for scorer, method in evaluator.scorers
-        if 'Spice' not in type(scorer).__name__
-    ]
     evaluator.evaluate()
+    evaluator.eval.pop('SPICE', None)   # remove patched zero value
+
     print(f'\n[{label}]')
     for k, v in evaluator.eval.items():
         print(f'  {k:<12}: {v:.4f}')

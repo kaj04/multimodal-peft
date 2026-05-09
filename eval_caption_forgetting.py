@@ -49,7 +49,7 @@ from pathlib import Path
 PIP_PACKAGES = '/scratch-shared/tesr125338/pip_packages'
 NLTK_DATA    = '/scratch-shared/tesr125338/nltk_data'
 if PIP_PACKAGES not in sys.path:
-    sys.path.insert(0, PIP_PACKAGES)
+    sys.path.append(PIP_PACKAGES)   # append: conda numpy stays first
 
 import nltk
 nltk.data.path.append(NLTK_DATA)

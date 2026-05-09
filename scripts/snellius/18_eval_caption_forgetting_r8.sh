@@ -30,7 +30,7 @@ eval "$(conda shell.bash hook)"
 conda activate 4m-peft
 
 # ── Extra packages installed on scratch (pycocoevalcap, pycocotools, nltk) ──
-export PYTHONPATH=/scratch-shared/tesr125338/pip_packages:${PYTHONPATH}
+export PYTHONPATH=${PYTHONPATH}:/scratch-shared/tesr125338/pip_packages
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 REPO_ROOT="$HOME/4m-peft"
 

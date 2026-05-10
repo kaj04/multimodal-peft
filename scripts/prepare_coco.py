@@ -68,6 +68,11 @@ def get_args():
     p.add_argument('--phase',      default='both',
                    choices=['rgb', 'caption', 'both'],
                    help='Which tokenization phase to run')
+    p.add_argument('--n_train',    default=10000, type=int,
+                   help='Number of train images to sample (0 = all ~118k). '
+                        'Fixed seed ensures reproducibility. Val is always full.')
+    p.add_argument('--seed',       default=42, type=int,
+                   help='Random seed for train subset sampling')
     p.add_argument('--dry_run',    action='store_true',
                    help='Process only the first 8 images per split')
     return p.parse_args()
@@ -99,18 +104,29 @@ def tokenize_rgb_split(
         rgb_tok,
         batch_size: int,
         device: torch.device,
+        sampled_stems: set = None,
         dry_run: bool = False,
 ):
-    """Tokenize all JPEGs in img_dir → out_dir/<stem>.npy (int16, shape 196)."""
+    """Tokenize JPEGs in img_dir → out_dir/<stem>.npy (int16, shape 196).
+
+    Args:
+        sampled_stems: if not None, only tokenize images whose stem is in this set.
+                       Used to restrict train to the sampled subset.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
 
     img_paths = sorted(img_dir.glob('*.jpg'))
     if not img_paths:
         raise RuntimeError(f'No .jpg files found in {img_dir}')
+
+    if sampled_stems is not None:
+        img_paths = [p for p in img_paths if p.stem in sampled_stems]
+        print(f'\n[RGB {split_name}] {len(img_paths)} sampled images → {out_dir}')
+    else:
+        print(f'\n[RGB {split_name}] {len(img_paths)} images → {out_dir}')
+
     if dry_run:
         img_paths = img_paths[:8]
-
-    print(f'\n[RGB {split_name}] {len(img_paths)} images → {out_dir}')
 
     for i in tqdm(range(0, len(img_paths), batch_size), desc=f'  {split_name} RGB'):
         batch_paths = img_paths[i: i + batch_size]
@@ -142,13 +158,17 @@ def tokenize_captions_split(
         out_dir: Path,
         tok,
         max_len: int = MAX_CAPTION_LEN,
+        sampled_stems: set = None,
         dry_run: bool = False,
 ):
     """Tokenize COCO captions → out_dir/<image_id_12digit>.npy (int16, shape max_len).
 
-    Selects the FIRST caption per image deterministically.
+    Selects the FIRST caption per image (by annotation id — deterministic).
     Pads with 0 (padding_idx=0 in SequenceDecoderEmbedding).
     Appends [EOS] before padding.
+
+    Args:
+        sampled_stems: if not None, only tokenize images whose stem is in this set.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -169,6 +189,9 @@ def tokenize_captions_split(
 
     # COCO image filenames: 000000123456.jpg → stem = 000000123456
     images = data['images']
+    if sampled_stems is not None:
+        images = [img for img in images if Path(img['file_name']).stem in sampled_stems]
+        print(f'  Filtered to {len(images)} sampled images')
     if dry_run:
         images = images[:8]
 
@@ -216,6 +239,7 @@ def main():
     print(f'Device     : {device}')
     print(f'COCO dir   : {coco_dir}')
     print(f'Output dir : {out_dir}')
+    print(f'n_train    : {args.n_train if args.n_train > 0 else "all"}  (seed={args.seed})')
     if args.dry_run:
         print('DRY RUN — processing 8 images per split only')
 
@@ -224,6 +248,25 @@ def main():
         splits.append('train')
     if args.splits in ('val', 'both'):
         splits.append('val')
+
+    # ── Compute sampled train subset ──────────────────────────────────────────
+    # We sample ONCE here and pass the same set to both RGB and caption phases,
+    # guaranteeing that tok_rgb/ and caption/ contain exactly the same images.
+    train_sampled_stems = None   # None = use all images (for val, or n_train=0)
+    if 'train' in splits and args.n_train > 0 and not args.dry_run:
+        ann_path = coco_dir / 'annotations' / 'captions_train2017.json'
+        with open(ann_path) as f:
+            meta = json.load(f)
+        all_stems = [Path(img['file_name']).stem for img in meta['images']]
+        # Check which stems actually exist on disk
+        img_dir = coco_dir / 'train2017'
+        all_stems = [s for s in all_stems if (img_dir / f'{s}.jpg').exists()]
+        rng = np.random.default_rng(args.seed)
+        n = min(args.n_train, len(all_stems))
+        chosen = rng.choice(all_stems, size=n, replace=False)
+        train_sampled_stems = set(chosen)
+        print(f'\nTrain subset: {len(train_sampled_stems)} / {len(all_stems)} images '
+              f'(seed={args.seed})')
 
     # ── Phase 1: RGB tokenization (GPU) ──────────────────────────────────────
     if args.phase in ('rgb', 'both'):
@@ -237,8 +280,9 @@ def main():
         for split in splits:
             img_dir = coco_dir / f'{split}2017'
             tok_out = out_dir  / split / 'tok_rgb'
+            stems   = train_sampled_stems if split == 'train' else None
             tokenize_rgb_split(split, img_dir, tok_out, rgb_tok,
-                               args.batch_size, device, args.dry_run)
+                               args.batch_size, device, stems, args.dry_run)
 
         del rgb_tok
         torch.cuda.empty_cache()
@@ -258,8 +302,9 @@ def main():
             # Folder name must match target_mod key used by run_finetuning_lora.py:
             #   target_mod='caption' → target_folder='caption' (split on '@', take [0])
             cap_out = out_dir / split / 'caption'
+            stems   = train_sampled_stems if split == 'train' else None
             tokenize_captions_split(split, ann_map[split], cap_out,
-                                    cap_tok, MAX_CAPTION_LEN, args.dry_run)
+                                    cap_tok, MAX_CAPTION_LEN, stems, args.dry_run)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print('\n=== Done ===')

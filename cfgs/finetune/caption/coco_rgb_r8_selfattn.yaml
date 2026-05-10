@@ -1,0 +1,52 @@
+# LoRA fine-tuning on COCO captioning (RGB → text)
+#
+# Mirrors depth run 15 (r8/selfattn/drop005) for a clean cross-task comparison:
+# same LoRA rank, same modules (self-attention only), same LR schedule.
+# Task difference: target is 'caption' (wordpiece seq, vocab 30k, 64 tokens)
+# vs 'tok_depth@224' (VQ image tokens, vocab 16k, 196 tokens).
+#
+# Train subset: 10k images sampled from COCO train2017 (seed=42, see prepare_coco.py).
+# Val: full COCO val2017 (5000 images).
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA — identical to depth run 15 for cross-task comparison
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: selfattn
+lora_dropout: 0.05
+
+# Task
+task: caption
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 64     # wordpiece tokens per caption (max; avg COCO caption ~15 wp tokens)
+loss_type: mod
+
+# Training — identical to depth run 15
+epochs: 50
+batch_size: 8
+accum_iter: 2
+blr: 1.0e-4
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 5
+save_ckpt_freq: 10
+early_stop_patience: 5
+
+# Data (output of scripts/prepare_coco.py --n_train 10000 --seed 42)
+data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+num_workers: 8
+
+# Output
+output_dir: '/scratch-shared/tesr125338/output/caption/coco_rgb_r8_selfattn_drop005'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_caption_coco_r8_selfattn_drop005'

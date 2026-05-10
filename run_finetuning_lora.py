@@ -874,12 +874,16 @@ def main(args):
         if log_writer is not None:
             # WandB: remap to grouped metric names so train+val loss appear
             # on the same chart (loss/*), with epoch as x-axis
+            # Build a safe WandB key for the per-modality train loss
+            # e.g. 'tok_depth@224' → 'loss/tok_depth_train'
+            #      'caption'       → 'loss/caption_train'
+            target_key = args.target_mod.replace('@', '_').replace('/', '_')
             wandb_stats = {
-                'epoch':            epoch,
-                'loss/train':       train_stats.get('loss', 0),
-                'loss/depth_train': train_stats.get('loss_tok_depth@224', 0),
-                'lr':               train_stats.get('lr', 0),
-                'grad_norm':        train_stats.get('grad_norm', 0),
+                'epoch':                          epoch,
+                'loss/train':                     train_stats.get('loss', 0),
+                f'loss/{target_key}_train':       train_stats.get(f'loss_{args.target_mod}', 0),
+                'lr':                             train_stats.get('lr', 0),
+                'grad_norm':                      train_stats.get('grad_norm', 0),
             }
             if eval_stats:
                 wandb_stats['loss/val']      = eval_stats.get('loss', 0)

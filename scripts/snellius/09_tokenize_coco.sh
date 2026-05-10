@@ -43,6 +43,8 @@ python scripts/prepare_coco.py \
     --batch_size 64 \
     --device     cuda \
     --splits     both \
-    --phase      both
+    --phase      both \
+    --n_train    10000 \
+    --seed       42
 
 echo "=== Done. Next step: sbatch scripts/snellius/10_ft_caption_coco.sh ==="

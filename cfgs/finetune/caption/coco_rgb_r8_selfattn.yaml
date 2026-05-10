@@ -24,11 +24,13 @@ num_input_tokens: 196
 num_target_tokens: 64     # wordpiece tokens per caption (max; avg COCO caption ~15 wp tokens)
 loss_type: mod
 
-# Training — identical to depth run 15
+# Training — identical to depth run 15 for cross-task comparison:
+#   4 GPUs × bs=2 × accum=4 = 32 effective batch size
+#   same blr=5e-5, same schedule
 epochs: 50
-batch_size: 8
-accum_iter: 2
-blr: 1.0e-4
+batch_size: 2
+accum_iter: 4
+blr: 5.0e-5
 min_blr: 0.0
 weight_decay: 0.05
 clip_grad: 1.0

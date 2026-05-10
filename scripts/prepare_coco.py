@@ -258,9 +258,13 @@ def main():
         with open(ann_path) as f:
             meta = json.load(f)
         all_stems = [Path(img['file_name']).stem for img in meta['images']]
-        # Check which stems actually exist on disk
+        # Check which stems actually exist on disk.
+        # Use os.listdir() (single syscall) instead of per-file .exists()
+        # — critical on GPFS where 118k individual stat() calls take 20+ min.
         img_dir = coco_dir / 'train2017'
-        all_stems = [s for s in all_stems if (img_dir / f'{s}.jpg').exists()]
+        existing_stems = {os.path.splitext(f)[0] for f in os.listdir(img_dir)
+                          if f.endswith('.jpg')}
+        all_stems = [s for s in all_stems if s in existing_stems]
         rng = np.random.default_rng(args.seed)
         n = min(args.n_train, len(all_stems))
         chosen = rng.choice(all_stems, size=n, replace=False)

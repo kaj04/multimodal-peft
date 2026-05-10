@@ -1,0 +1,53 @@
+# LoRA fine-tuning on COCO captioning (RGB → text)
+#
+# Run 20: rank=4, selfattn, dropout=0.1, blr=3e-5
+# Reduced rank and higher dropout relative to run 19 (r8/drop005) to reduce
+# overfitting on the 10k-image train subset. eval_freq=1 for fine-grained
+# early stopping.
+#
+# Train subset: 10k images sampled from COCO train2017 (seed=42, see prepare_coco.py).
+# Val: full COCO val2017 (5000 images).
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 4
+lora_scale: 1.0
+lora_modules: selfattn
+lora_dropout: 0.1
+
+# Task
+task: caption
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 64     # wordpiece tokens per caption (max; avg COCO caption ~15 wp tokens)
+loss_type: mod
+
+# Training
+#   4 GPUs × bs=2 × accum=4 = 32 effective batch size
+epochs: 50
+batch_size: 2
+accum_iter: 4
+blr: 3.0e-5
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 1
+save_ckpt_freq: 10
+early_stop_patience: 5
+
+# Data (output of scripts/prepare_coco.py --n_train 10000 --seed 42)
+data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+num_workers: 8
+
+# Output
+output_dir: '/scratch-shared/tesr125338/output/caption/coco_rgb_r4_selfattn_drop01'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_caption_coco_r4_selfattn_drop01'

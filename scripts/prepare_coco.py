@@ -316,7 +316,7 @@ def main():
         rgb_n = len(list((out_dir / split / 'tok_rgb').glob('*.npy'))) if (out_dir / split / 'tok_rgb').exists() else 0
         cap_n = len(list((out_dir / split / 'caption').glob('*.npy')))  if (out_dir / split / 'caption').exists()  else 0
         print(f'  [{split}]  tok_rgb: {rgb_n}  tok_caption: {cap_n}')
-    print(f'\nNext step: sbatch scripts/snellius/10_ft_caption_coco.sh')
+    print(f'\nNext step: sbatch scripts/snellius/19_ft_caption_coco_r8_selfattn.sh')
 
 
 if __name__ == '__main__':

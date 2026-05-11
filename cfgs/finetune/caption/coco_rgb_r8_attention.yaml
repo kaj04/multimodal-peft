@@ -1,48 +1,56 @@
 # LoRA fine-tuning on COCO captioning (RGB → text)
 #
-# Config mirrors the original depth run (r8, attention) to enable fair cross-task comparison.
-# Same LoRA capacity, same effective batch size, same LR schedule.
-# Task difference: target is 'caption' (wordpiece seq, vocab 30k) vs 'tok_depth@224' (VQ img, vocab 16k).
+# Run 23: rank=8, selfattn+crossattn (attention), dropout=0.1, blr=3e-5
+# Extends run 20 (r4/selfattn) by:
+#   - Adding cross-attention LoRA — directly modifies the visual→text channel
+#   - Doubling rank (4→8) for more capacity
+# Cross-attention is the primary mechanism for visually-grounded caption
+# generation in 4M; selfattn-only (run 20) showed minimal improvement.
 #
-# Paper metrics: CIDEr-D and BLEU@4 (computed by eval_caption.py after training).
+# Train subset: 10k images sampled from COCO train2017 (seed=42, same as runs 19/20).
+# Val: full COCO val2017 (5000 images). eval_freq=1 + patience=10 for fine-grained
+# early stopping with enough patience to escape local minima.
 
 pretrained_model: 'EPFL-VILAB/4M-21_XL'
 dtype: bfloat16
 
-# LoRA — identical to depth r8/attention run for cross-task comparison
+# LoRA
 lora_rank: 8
 lora_scale: 1.0
-lora_modules: attention
+lora_modules: attention       # selfattn + crossattn
+lora_dropout: 0.1
 
 # Task
 task: caption
 input_mod: 'tok_rgb@224'
 num_input_tokens: 196
-num_target_tokens: 64     # wordpiece tokens per caption (max; avg COCO caption ~15 wp tokens)
+num_target_tokens: 64
 loss_type: mod
 
-# Training — identical to depth r8 run
+# Training
+#   4 GPUs x bs=2 x accum=4 = 32 effective batch size
 epochs: 50
 batch_size: 2
-accum_iter: 8
-blr: 1.0e-4
+accum_iter: 4
+blr: 3.0e-5
 min_blr: 0.0
 weight_decay: 0.05
 clip_grad: 1.0
 warmup_epochs: 5
-eval_freq: 5
+eval_freq: 1
 save_ckpt_freq: 10
+early_stop_patience: 10
 
-# Data
+# Data (output of scripts/prepare_coco.py --n_train 10000 --seed 42)
 data_path: '/scratch-shared/tesr125338/coco_tokens/train'
 eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
 num_workers: 8
 
 # Output
-output_dir: '/scratch-shared/tesr125338/output/caption/coco_rgb_r8_attention'
+output_dir: '/scratch-shared/tesr125338/output/caption/coco_rgb_r8_attention_drop01'
 
 # WandB
 log_wandb: true
 wandb_project: '4M-PEFT'
 wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
-wandb_run_name: 'lora_caption_coco_r8_attention'
+wandb_run_name: 'lora_caption_coco_r8_attention_drop01'

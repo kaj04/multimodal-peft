@@ -97,10 +97,10 @@ def get_args():
                         choices=['float32', 'fp32', 'float16', 'fp16', 'bfloat16', 'bf16'],
                         help='Model dtype for training')
 
-    # --- Task ---
-    parser.add_argument('--task', default='semseg', type=str,
-                        choices=['semseg', 'depth'],
-                        help='Downstream dense task to fine-tune on')
+    # --- Task (single-task mode) ---
+    parser.add_argument('--task', default=None, type=str,
+                        choices=['semseg', 'depth', 'caption'],
+                        help='Single downstream task. Mutually exclusive with --tasks.')
     parser.add_argument('--input_mod', default='tok_rgb@224', type=str,
                         help='Input modality key (must match MODALITY_INFO)')
     parser.add_argument('--num_input_tokens', default=196, type=int,
@@ -109,6 +109,19 @@ def get_args():
                         help='Number of target tokens to predict')
     parser.add_argument('--loss_type', default='mod', type=str, choices=['mod', 'token'],
                         help='mod = mean of per-modality loss; token = mean per-token loss')
+
+    # --- Multi-task mode ---
+    # Set via YAML as a list of dicts, e.g.:
+    #   tasks:
+    #     - name: caption
+    #       target_mod: caption
+    #       num_target_tokens: 64
+    #     - name: semseg
+    #       target_mod: tok_semseg@224
+    #       num_target_tokens: 196
+    # When 'tasks' is set, single-task 'task' is ignored.
+    parser.add_argument('--tasks', default=None, type=list,
+                        help='Multi-task config (list of dicts). See YAML example above.')
 
     # --- Training ---
     parser.add_argument('--epochs', default=50, type=int)
@@ -176,19 +189,21 @@ def get_args():
     args = parser.parse_args(remaining)
     args.config_path = args_config.config
 
-    # Derive target_mod from task
-    # target_mod must match the modality key in ml-4m/fourm/data/modality_info.py,
-    # and also determines the subfolder name on disk:
-    #   target_folder = target_mod.split('@')[0]
-    #   e.g. 'tok_depth@224' → 'tok_depth/', 'caption' → 'caption/'
-    if args.task == 'semseg':
-        args.target_mod = 'tok_semseg@224'
-    elif args.task == 'depth':
-        args.target_mod = 'tok_depth@224'
-    elif args.task == 'caption':
-        args.target_mod = 'caption'   # vocab 30k wordpiece, max_tokens 256, type 'seq'
+    # Derive target_mod from task (single-task mode only)
+    _TASK_TO_MOD = {
+        'semseg':  ('tok_semseg@224', 196),
+        'depth':   ('tok_depth@224',  196),
+        'caption': ('caption',         64),
+    }
+    if args.tasks:
+        # Multi-task: target_mod / num_target_tokens are per-task (in args.tasks list)
+        args.target_mod = None
+    elif args.task:
+        if args.task not in _TASK_TO_MOD:
+            raise ValueError(f'Unknown task: {args.task}')
+        args.target_mod, args.num_target_tokens = _TASK_TO_MOD[args.task]
     else:
-        raise ValueError(f'Unknown task: {args.task}')
+        raise ValueError('Must specify either --task (single) or --tasks (multi-task via YAML).')
 
     return args
 
@@ -260,6 +275,42 @@ class TokenizedDenseDataset(torch.utils.data.Dataset):
         input_tokens = np.load(self._find_file(self.input_dir, stem)).astype(np.int64)
         target_tokens = np.load(self._find_file(self.target_dir, stem)).astype(np.int64)
         return torch.from_numpy(input_tokens), torch.from_numpy(target_tokens)
+
+
+# ---------------------------------------------------------------------------
+# Multi-task dataset: interleaves N TokenizedDenseDatasets
+# ---------------------------------------------------------------------------
+
+class MultiTaskDataset(torch.utils.data.Dataset):
+    """Wraps N TokenizedDenseDatasets and exposes them as a single dataset.
+
+    Each item is (input_tokens, target_tokens, task_idx) where task_idx
+    identifies which task/dataset this sample belongs to.
+
+    The dataset is ordered [all task-0 samples, all task-1 samples, ...]
+    but the DataLoader's DistributedSampler+shuffle will interleave them.
+
+    Note: all tasks share the same input modality (tok_rgb@224) but have
+    different target modalities and token counts. Batches must be
+    homogeneous (same task_idx) — enforced via the per-task DataLoaders
+    in train_one_epoch_multitask().
+    """
+
+    def __init__(self, datasets):
+        self.datasets = datasets
+        # Build a flat index: (dataset_idx, local_sample_idx)
+        self.index = []
+        for d_idx, ds in enumerate(datasets):
+            for s_idx in range(len(ds)):
+                self.index.append((d_idx, s_idx))
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        d_idx, s_idx = self.index[idx]
+        input_tokens, target_tokens = self.datasets[d_idx][s_idx]
+        return input_tokens, target_tokens, torch.tensor(d_idx, dtype=torch.long)
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +545,122 @@ def train_one_epoch(
 
 
 # ---------------------------------------------------------------------------
+# Multi-task training loop (one epoch)
+# Alternates batches between tasks: step 0 = task 0, step 1 = task 1, ...
+# All tasks update the SAME LoRA weights → shared adapter learns both tasks.
+# ---------------------------------------------------------------------------
+
+def train_one_epoch_multitask(
+        model: nn.Module,
+        task_loaders,          # list of DataLoaders, one per task
+        task_cfgs,             # list of dicts: [{target_mod, num_target_tokens, name}, ...]
+        optimizer: torch.optim.Optimizer,
+        device: torch.device,
+        epoch: int,
+        loss_scaler: NativeScaler,
+        args,
+        lr_schedule_values=None,
+        wd_schedule_values=None,
+        log_writer=None,
+        start_steps: int = 0,
+):
+    model.train()
+    metric_logger = utils.MetricLogger(delimiter='  ')
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.2e}'))
+    header = f'Epoch [{epoch}] (multi-task)'
+    print_freq = 50
+
+    optimizer.zero_grad()
+
+    n_tasks = len(task_cfgs)
+    # One iterator per task; we zip them and alternate tasks per step
+    iterators = [iter(dl) for dl in task_loaders]
+    n_steps_per_task = min(len(dl) for dl in task_loaders)
+
+    global_step = start_steps
+    for base_step in range(n_steps_per_task):
+        for task_idx, (loader_iter, tcfg) in enumerate(zip(iterators, task_cfgs)):
+            try:
+                input_tokens, target_tokens = next(loader_iter)
+            except StopIteration:
+                continue
+
+            it = global_step
+
+            if lr_schedule_values is not None:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr_schedule_values[min(it, len(lr_schedule_values) - 1)]
+            if wd_schedule_values is not None:
+                for param_group in optimizer.param_groups:
+                    if param_group.get('weight_decay', 0) > 0:
+                        param_group['weight_decay'] = wd_schedule_values[min(it, len(wd_schedule_values) - 1)]
+
+            input_tokens  = input_tokens.to(device, non_blocking=True)
+            target_tokens = target_tokens.to(device, non_blocking=True)
+
+            target_mod        = tcfg['target_mod']
+            num_target_tokens = tcfg['num_target_tokens']
+
+            mod_dict = build_mod_dict(
+                input_tokens, target_tokens,
+                input_mod=args.input_mod,
+                target_mod=target_mod,
+                num_input_tokens=args.num_input_tokens,
+                num_target_tokens=num_target_tokens,
+            )
+
+            with torch.cuda.amp.autocast(enabled=(args.dtype in ['float16', 'fp16']),
+                                          dtype=torch.bfloat16 if args.dtype in ['bfloat16', 'bf16'] else torch.float16):
+                loss, mod_loss = model(
+                    mod_dict,
+                    num_encoder_tokens=args.num_input_tokens,
+                    num_decoder_tokens=num_target_tokens,
+                    loss_type=args.loss_type,
+                )
+
+            target_loss_value = mod_loss[target_mod].item()
+            loss_value        = loss.item()
+            if not math.isfinite(loss_value):
+                print(f'Loss is {loss_value}, stopping training.')
+                sys.exit(1)
+
+            loss = loss / args.accum_iter
+            grad_norm = loss_scaler(
+                loss, optimizer,
+                clip_grad=args.clip_grad,
+                parameters=[p for p in model.parameters() if p.requires_grad],
+                update_grad=((global_step + 1) % args.accum_iter == 0),
+            )
+            if (global_step + 1) % args.accum_iter == 0:
+                optimizer.zero_grad()
+
+            torch.cuda.synchronize()
+
+            task_name = tcfg.get('name', f'task{task_idx}')
+            metric_logger.update(**{f'loss_{task_name}': target_loss_value})
+            metric_logger.update(lr=optimizer.param_groups[0]['lr'])
+            if grad_norm is not None:
+                metric_logger.update(grad_norm=grad_norm)
+
+            if log_writer is not None and (global_step + 1) % args.accum_iter == 0:
+                log_writer.update({
+                    f'train/loss_{task_name}': target_loss_value,
+                    'train/lr':               optimizer.param_groups[0]['lr'],
+                    'train/grad_norm':         grad_norm if grad_norm is not None else 0.0,
+                    'train/step':             it,
+                })
+
+            if (base_step * n_tasks + task_idx) % print_freq == 0:
+                metric_logger.log_every([], print_freq, header=header)
+
+            global_step += 1
+
+    metric_logger.synchronize_between_processes()
+    print(f'[Train MT] Averaged stats: {metric_logger}')
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+# ---------------------------------------------------------------------------
 # Evaluation loop
 # ---------------------------------------------------------------------------
 
@@ -577,6 +744,65 @@ def evaluate(
     metric_logger.synchronize_between_processes()
     print(f'[Eval]  Averaged stats: {metric_logger}')
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+@torch.no_grad()
+def evaluate_multitask(model, task_loaders, task_cfgs, device, epoch=0):
+    """Evaluate each task separately; return per-task stats + mean loss."""
+    all_stats = {}
+    losses = []
+
+    for tcfg, data_loader in zip(task_cfgs, task_loaders):
+        task_name         = tcfg.get('name', tcfg['target_mod'])
+        target_mod        = tcfg['target_mod']
+        num_target_tokens = tcfg['num_target_tokens']
+
+        model.eval()
+        metric_logger = utils.MetricLogger(delimiter='  ')
+
+        for input_tokens, target_tokens in data_loader:
+            input_tokens  = input_tokens.to(device, non_blocking=True)
+            target_tokens = target_tokens.to(device, non_blocking=True)
+
+            mod_dict = build_mod_dict(
+                input_tokens, target_tokens,
+                input_mod='tok_rgb@224',
+                target_mod=target_mod,
+                num_input_tokens=196,
+                num_target_tokens=num_target_tokens,
+            )
+
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                mod_logits = model(
+                    mod_dict,
+                    num_encoder_tokens=196,
+                    num_decoder_tokens=num_target_tokens,
+                    return_logits=True,
+                )
+
+            logits = mod_logits[target_mod]
+            B, T, V = logits.shape
+            loss = F.cross_entropy(
+                logits.reshape(-1, V).float(),
+                target_tokens.reshape(-1).long(),
+                reduction='mean',
+            )
+            preds      = logits.argmax(dim=-1)
+            token_acc  = (preds == target_tokens).float().mean()
+
+            metric_logger.update(loss=loss.item())
+            metric_logger.update(token_acc=token_acc.item())
+
+        metric_logger.synchronize_between_processes()
+        stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+        all_stats[task_name] = stats
+        losses.append(stats['loss'])
+        print(f'[Eval MT] {task_name:12s}  loss={stats["loss"]:.4f}  '
+              f'token_acc={stats["token_acc"]:.4f}')
+
+    all_stats['mean_loss'] = float(np.mean(losses))
+    print(f'[Eval MT] mean_loss={all_stats["mean_loss"]:.4f}')
+    return all_stats
 
 
 # ---------------------------------------------------------------------------
@@ -677,51 +903,103 @@ def main(args):
         return
 
     # -----------------------------------------------------------------------
-    # Data
+    # Data  (single-task OR multi-task branch)
     # -----------------------------------------------------------------------
-    # Map modality key (e.g. 'tok_rgb@224') → folder name on disk (e.g. 'tok_rgb')
+    is_multitask = bool(getattr(args, 'tasks', None))
     input_folder = args.input_mod.split('@')[0]
-    target_folder = args.target_mod.split('@')[0]
 
-    dataset_train = TokenizedDenseDataset(
-        root=args.data_path,
-        input_mod_folder=input_folder,
-        target_mod_folder=target_folder,
-    )
+    if is_multitask:
+        # ── Multi-task: one DataLoader per task ──────────────────────────────
+        task_cfgs = args.tasks   # list of dicts: [{name, target_mod, num_target_tokens}]
+        print(f'Multi-task mode: {[t["name"] for t in task_cfgs]}')
 
-    sampler_train = torch.utils.data.DistributedSampler(
-        dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, drop_last=True,
-    ) if args.distributed else torch.utils.data.RandomSampler(dataset_train)
+        def _make_loader(root, target_mod, shuffle, drop_last):
+            target_folder = target_mod.split('@')[0]
+            ds = TokenizedDenseDataset(root=root,
+                                       input_mod_folder=input_folder,
+                                       target_mod_folder=target_folder)
+            sampler = (
+                torch.utils.data.DistributedSampler(
+                    ds, num_replicas=num_tasks, rank=global_rank,
+                    shuffle=shuffle, drop_last=drop_last)
+                if args.distributed
+                else (torch.utils.data.RandomSampler(ds) if shuffle
+                      else torch.utils.data.SequentialSampler(ds))
+            )
+            return ds, torch.utils.data.DataLoader(
+                ds, sampler=sampler,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                pin_memory=args.pin_mem,
+                drop_last=drop_last,
+            )
 
-    data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=True,
-    )
+        train_datasets, data_loaders_train = zip(*[
+            _make_loader(args.data_path, t['target_mod'], shuffle=True, drop_last=True)
+            for t in task_cfgs
+        ])
+        data_loaders_train = list(data_loaders_train)
 
-    data_loader_val = None
-    if args.eval_data_path:
-        dataset_val = TokenizedDenseDataset(
-            root=args.eval_data_path,
+        val_datasets, data_loaders_val = [], []
+        if args.eval_data_path:
+            val_datasets, data_loaders_val = zip(*[
+                _make_loader(args.eval_data_path, t['target_mod'], shuffle=False, drop_last=False)
+                for t in task_cfgs
+            ])
+            data_loaders_val = list(data_loaders_val)
+
+        # Steps/epoch = n_tasks × min loader length (balanced interleaving)
+        num_training_steps_per_epoch = (
+            min(len(dl) for dl in data_loaders_train) * len(task_cfgs)
+        )
+
+        # Placeholders so the rest of main() compiles in single-task path
+        data_loader_train = None
+        data_loader_val   = None if not val_datasets else True   # truthy flag only
+
+    else:
+        # ── Single-task (original code path) ─────────────────────────────────
+        target_folder = args.target_mod.split('@')[0]
+
+        dataset_train = TokenizedDenseDataset(
+            root=args.data_path,
             input_mod_folder=input_folder,
             target_mod_folder=target_folder,
         )
-        sampler_val = (
-            torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
-            if (args.distributed and args.dist_eval)
-            else torch.utils.data.SequentialSampler(dataset_val)
-        )
-        data_loader_val = torch.utils.data.DataLoader(
-            dataset_val, sampler=sampler_val,
+
+        sampler_train = torch.utils.data.DistributedSampler(
+            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, drop_last=True,
+        ) if args.distributed else torch.utils.data.RandomSampler(dataset_train)
+
+        data_loader_train = torch.utils.data.DataLoader(
+            dataset_train, sampler=sampler_train,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
-            drop_last=False,
+            drop_last=True,
         )
 
-    num_training_steps_per_epoch = len(dataset_train) // (args.batch_size * num_tasks)
+        data_loader_val = None
+        if args.eval_data_path:
+            dataset_val = TokenizedDenseDataset(
+                root=args.eval_data_path,
+                input_mod_folder=input_folder,
+                target_mod_folder=target_folder,
+            )
+            sampler_val = (
+                torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
+                if (args.distributed and args.dist_eval)
+                else torch.utils.data.SequentialSampler(dataset_val)
+            )
+            data_loader_val = torch.utils.data.DataLoader(
+                dataset_val, sampler=sampler_val,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                pin_memory=args.pin_mem,
+                drop_last=False,
+            )
+
+        num_training_steps_per_epoch = len(dataset_train) // (args.batch_size * num_tasks)
 
     # -----------------------------------------------------------------------
     # Optimizer
@@ -811,25 +1089,46 @@ def main(args):
     patience_counter = 0
 
     for epoch in range(args.start_epoch if hasattr(args, 'start_epoch') else 0, args.epochs):
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
 
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch)
 
-        train_stats = train_one_epoch(
-            model=model,
-            data_loader=data_loader_train,
-            optimizer=optimizer,
-            device=device,
-            epoch=epoch,
-            loss_scaler=loss_scaler,
-            args=args,
-            lr_schedule_values=lr_schedule_values,
-            wd_schedule_values=wd_schedule_values,
-            log_writer=log_writer,
-            start_steps=epoch * num_training_steps_per_epoch,
-        )
+        # ── Training step ────────────────────────────────────────────────────
+        if is_multitask:
+            # Shuffle each task's sampler independently
+            if args.distributed:
+                for dl in data_loaders_train:
+                    dl.sampler.set_epoch(epoch)
+            train_stats = train_one_epoch_multitask(
+                model=model,
+                task_loaders=data_loaders_train,
+                task_cfgs=task_cfgs,
+                optimizer=optimizer,
+                device=device,
+                epoch=epoch,
+                loss_scaler=loss_scaler,
+                args=args,
+                lr_schedule_values=lr_schedule_values,
+                wd_schedule_values=wd_schedule_values,
+                log_writer=log_writer,
+                start_steps=epoch * num_training_steps_per_epoch,
+            )
+        else:
+            if args.distributed:
+                data_loader_train.sampler.set_epoch(epoch)
+            train_stats = train_one_epoch(
+                model=model,
+                data_loader=data_loader_train,
+                optimizer=optimizer,
+                device=device,
+                epoch=epoch,
+                loss_scaler=loss_scaler,
+                args=args,
+                lr_schedule_values=lr_schedule_values,
+                wd_schedule_values=wd_schedule_values,
+                log_writer=log_writer,
+                start_steps=epoch * num_training_steps_per_epoch,
+            )
 
         # Save checkpoint
         if args.output_dir and (epoch + 1) % args.save_ckpt_freq == 0:
@@ -838,13 +1137,21 @@ def main(args):
                 optimizer=optimizer, loss_scaler=loss_scaler, epoch=epoch,
             )
 
-        # Evaluate
+        # ── Evaluation ───────────────────────────────────────────────────────
         eval_stats = {}
-        if data_loader_val is not None and (epoch % args.eval_freq == 0 or epoch == args.epochs - 1):
-            eval_stats = evaluate(model, data_loader_val, device, args, epoch=epoch)
+        should_eval = epoch % args.eval_freq == 0 or epoch == args.epochs - 1
 
-            # Save best checkpoint (by val loss)
-            current_val_loss = eval_stats.get('loss', float('inf'))
+        if should_eval:
+            if is_multitask and data_loaders_val:
+                eval_stats = evaluate_multitask(
+                    model, data_loaders_val, task_cfgs, device, epoch=epoch)
+                current_val_loss = eval_stats['mean_loss']
+            elif not is_multitask and data_loader_val is not None:
+                eval_stats = evaluate(model, data_loader_val, device, args, epoch=epoch)
+                current_val_loss = eval_stats.get('loss', float('inf'))
+            else:
+                current_val_loss = float('inf')
+
             if current_val_loss < best_loss:
                 best_loss = current_val_loss
                 patience_counter = 0
@@ -853,7 +1160,6 @@ def main(args):
                         args=args, model=model, model_without_ddp=model_without_ddp,
                         optimizer=optimizer, loss_scaler=loss_scaler, epoch='best',
                     )
-                    # Also save compact LoRA-only weights for best checkpoint
                     save_lora_weights(model_without_ddp, args.output_dir, tag='best')
                 print(f'  New best val loss: {best_loss:.4f}')
             else:
@@ -863,7 +1169,7 @@ def main(args):
                     print(f'  Early stopping triggered at epoch {epoch}.')
                     break
 
-        # Log stats
+        # ── Logging ──────────────────────────────────────────────────────────
         log_stats = {
             **{f'train/{k}': v for k, v in train_stats.items()},
             **{f'val/{k}': v for k, v in eval_stats.items()},
@@ -872,23 +1178,31 @@ def main(args):
             'lora_modules': args.lora_modules,
         }
         if log_writer is not None:
-            # WandB: remap to grouped metric names so train+val loss appear
-            # on the same chart (loss/*), with epoch as x-axis
-            # Build a safe WandB key for the per-modality train loss
-            # e.g. 'tok_depth@224' → 'loss/tok_depth_train'
-            #      'caption'       → 'loss/caption_train'
-            target_key = args.target_mod.replace('@', '_').replace('/', '_')
-            wandb_stats = {
-                'epoch':                          epoch,
-                'loss/train':                     train_stats.get('loss', 0),
-                f'loss/{target_key}_train':       train_stats.get(f'loss_{args.target_mod}', 0),
-                'lr':                             train_stats.get('lr', 0),
-                'grad_norm':                      train_stats.get('grad_norm', 0),
-            }
-            if eval_stats:
-                wandb_stats['loss/val']      = eval_stats.get('loss', 0)
-                wandb_stats['val/token_acc'] = eval_stats.get('token_acc', 0)
+            if is_multitask:
+                wandb_stats = {'epoch': epoch, 'lr': train_stats.get('lr', 0),
+                               'grad_norm': train_stats.get('grad_norm', 0)}
+                for tcfg in task_cfgs:
+                    n = tcfg['name']
+                    wandb_stats[f'loss/train_{n}'] = train_stats.get(f'loss_{n}', 0)
+                    if eval_stats:
+                        wandb_stats[f'loss/val_{n}'] = eval_stats.get(n, {}).get('loss', 0)
+                        wandb_stats[f'val/token_acc_{n}'] = eval_stats.get(n, {}).get('token_acc', 0)
+                if eval_stats:
+                    wandb_stats['loss/val_mean'] = eval_stats.get('mean_loss', 0)
+            else:
+                target_key = args.target_mod.replace('@', '_').replace('/', '_')
+                wandb_stats = {
+                    'epoch':                    epoch,
+                    'loss/train':               train_stats.get('loss', 0),
+                    f'loss/{target_key}_train': train_stats.get(f'loss_{args.target_mod}', 0),
+                    'lr':                       train_stats.get('lr', 0),
+                    'grad_norm':                train_stats.get('grad_norm', 0),
+                }
+                if eval_stats:
+                    wandb_stats['loss/val']      = eval_stats.get('loss', 0)
+                    wandb_stats['val/token_acc'] = eval_stats.get('token_acc', 0)
             log_writer.update(wandb_stats)
+
         if args.output_dir and utils.is_main_process():
             with open(os.path.join(args.output_dir, 'log.txt'), 'a') as f:
                 f.write(json.dumps(log_stats) + '\n')

@@ -1,0 +1,62 @@
+# Multi-task LoRA: COCO RGB → caption + semseg simultaneously
+#
+# Run 26: same LoRA adapter (rank=8, attention, dropout=0.1) trained on
+# caption and semseg batches in alternation.
+#
+# Hypothesis: shared visual representations for captioning and semantic
+# understanding reinforce each other → higher CIDEr than caption-only (run 23).
+#
+# Training: 10k COCO images (seed=42), same subset for both tasks.
+# Val:      5k COCO val2017, evaluated per-task.
+# Best ckpt: selected by mean(val_loss_caption, val_loss_semseg).
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA (shared adapter across both tasks)
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: attention
+lora_dropout: 0.1
+
+# Multi-task config: list of tasks trained simultaneously
+tasks:
+  - name: caption
+    target_mod: caption
+    num_target_tokens: 64
+  - name: semseg
+    target_mod: tok_semseg@224
+    num_target_tokens: 196
+
+# Shared input
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+loss_type: mod
+
+# Training
+#   4 GPUs x bs=2 x accum=4 = 32 effective batch size (same as run 23)
+epochs: 50
+batch_size: 2
+accum_iter: 4
+blr: 3.0e-5
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 1
+save_ckpt_freq: 10
+early_stop_patience: 10
+
+# Data (same coco_tokens as run 23, tok_semseg added by run 24)
+data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+num_workers: 8
+
+# Output
+output_dir: '/scratch-shared/tesr125338/output/multitask/coco_rgb_caption_semseg_r8_attention'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_multitask_caption_semseg_r8_attention'

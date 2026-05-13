@@ -124,11 +124,13 @@ def center_crop_resize_nearest(cat_map, size=224):
 
 def flush_batch(stems, maps, out_dir, semseg_tok, device):
     """Tokenise a batch of semantic maps and save each as int16 .npy."""
-    # Stack → (B, 224, 224) long; shift_idx_by_one to match SemsegTransform
-    # used during VQVAE training: 0 (bg) → 1, cat 1-133 → 2-134
+    # Stack → (B, 224, 224) long.
+    # COCO panoptic category_ids are already 1-133; the VQVAE embedding has
+    # 134 entries (indices 0-133). NO shift needed — adding +1 would produce
+    # index 134 which is out-of-bounds and causes a CUDA assertion error.
     batch = torch.stack(
         [torch.from_numpy(m).long() for m in maps]
-    ).to(device) + 1                     # shift_idx_by_one
+    ).to(device)    # values in [0, 133], valid for embedding size 134
 
     with torch.no_grad():
         tokens = semseg_tok.tokenize(batch)        # (B, 14, 14)

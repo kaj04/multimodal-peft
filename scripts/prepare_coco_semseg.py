@@ -63,22 +63,37 @@ def get_args():
 # ── Semantic map helpers ──────────────────────────────────────────────────────
 
 def build_stem_to_ann(pan_json_path):
-    """Load panoptic JSON → dict: image_stem → annotation dict."""
+    """Load panoptic JSON → (stem_to_ann dict, id_mapping dict).
+
+    id_mapping remaps the 133 non-contiguous COCO panoptic category_ids
+    (thing IDs up to 90 with gaps; stuff IDs up to ~183) to a contiguous
+    range [1, 133] sorted by original id.  This is required because the
+    VQVAE semseg tokenizer has embedding size 134 (indices 0-133) and
+    any raw category_id > 133 triggers a CUDA index-out-of-bounds error.
+    """
     with open(pan_json_path) as f:
         pan_data = json.load(f)
+
+    # Build contiguous remapping: original_category_id → 1-indexed [1, 133]
+    cats = sorted(pan_data['categories'], key=lambda c: c['id'])
+    id_mapping = {cat['id']: idx + 1 for idx, cat in enumerate(cats)}
+
     stem_to_ann = {}
     for ann in pan_data['annotations']:
         stem = Path(ann['file_name']).stem   # e.g. '000000123456'
         stem_to_ann[stem] = ann
-    return stem_to_ann
+
+    return stem_to_ann, id_mapping
 
 
-def load_semantic_map(zip_file, stem_to_ann, pan_dir_in_zip, stem):
-    """Read one panoptic PNG from ZIP → (H, W) int32 array of category_ids.
+def load_semantic_map(zip_file, stem_to_ann, id_mapping, pan_dir_in_zip, stem):
+    """Read one panoptic PNG from ZIP → (H, W) int32 array of contiguous ids.
 
     Panoptic PNG encoding:
         segment_id = R + G * 256 + B * 65536
-    The JSON maps segment_id → category_id (1-133 for COCO, 0 = background).
+    The JSON maps segment_id → category_id (non-contiguous COCO ids).
+    id_mapping remaps those to contiguous [1, 133]; unknown ids → 0.
+    Output values are guaranteed in [0, 133] — safe for embedding size 134.
     """
     png_name = f'{pan_dir_in_zip}/{stem}.png'
     try:
@@ -98,9 +113,10 @@ def load_semantic_map(zip_file, stem_to_ann, pan_dir_in_zip, stem):
 
     cat_map = np.zeros(seg_id_map.shape, dtype=np.int32)
     for seg in ann['segments_info']:
-        cat_map[seg_id_map == seg['id']] = seg['category_id']
+        mapped_id = id_mapping.get(seg['category_id'], 0)  # 0 = background/unknown
+        cat_map[seg_id_map == seg['id']] = mapped_id
 
-    return cat_map   # values in [0, 133]
+    return cat_map   # values in [0, 133] — safe for VQVAE embedding size 134
 
 
 def center_crop_resize_nearest(cat_map, size=224):
@@ -125,12 +141,12 @@ def center_crop_resize_nearest(cat_map, size=224):
 def flush_batch(stems, maps, out_dir, semseg_tok, device):
     """Tokenise a batch of semantic maps and save each as int16 .npy."""
     # Stack → (B, 224, 224) long.
-    # COCO panoptic category_ids are already 1-133; the VQVAE embedding has
-    # 134 entries (indices 0-133). NO shift needed — adding +1 would produce
-    # index 134 which is out-of-bounds and causes a CUDA assertion error.
+    # Category IDs have been remapped to contiguous [0, 133] by load_semantic_map
+    # (0 = background/unknown, 1-133 = the 133 COCO panoptic classes in sorted order).
+    # This is safe for the VQVAE embedding size of 134 (indices 0-133).
     batch = torch.stack(
         [torch.from_numpy(m).long() for m in maps]
-    ).to(device)    # values in [0, 133], valid for embedding size 134
+    ).to(device)    # values in [0, 133] — guaranteed by id_mapping
 
     with torch.no_grad():
         tokens = semseg_tok.tokenize(batch)        # (B, 14, 14)
@@ -163,8 +179,8 @@ def tokenize_split(split_name, coco_dir, tokens_dir, semseg_tok,
     existing_stems = {p.stem for p in rgb_dir.glob('*.npy')}
     print(f'\n[{split_name}] tok_rgb stems  : {len(existing_stems)}')
 
-    # Build JSON lookup
-    stem_to_ann = build_stem_to_ann(json_path)
+    # Build JSON lookup + contiguous id remapping
+    stem_to_ann, id_mapping = build_stem_to_ann(json_path)
     valid_stems = sorted(existing_stems & set(stem_to_ann.keys()))
     print(f'[{split_name}] valid for semseg: {len(valid_stems)}')
 
@@ -185,7 +201,7 @@ def tokenize_split(split_name, coco_dir, tokens_dir, semseg_tok,
 
     with zipfile.ZipFile(zip_path) as zf:
         for stem in tqdm(stems, desc=f'  {split_name} semseg'):
-            cat_map = load_semantic_map(zf, stem_to_ann, pan_dir, stem)
+            cat_map = load_semantic_map(zf, stem_to_ann, id_mapping, pan_dir, stem)
             if cat_map is None:
                 n_skipped += 1
                 continue

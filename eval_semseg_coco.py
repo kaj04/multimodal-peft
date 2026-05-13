@@ -139,8 +139,25 @@ def decode_semseg_tokens(semseg_tok, tokens):
 
 # ── Ground-truth loading ──────────────────────────────────────────────────────
 
-def load_gt_semseg(zip_file, stem_to_ann, pan_dir, stem, size=224):
-    """Load GT panoptic PNG from zip → (224, 224) int32 category_id map."""
+def build_id_mapping(pan_json_path):
+    """Build contiguous remapping: original_category_id → [1, 133] (sorted by id).
+
+    COCO panoptic category_ids are non-contiguous (things go up to 90 with
+    gaps; stuff go up to ~183). We remap them to contiguous [1, 133] so they
+    match the space used during semseg tokenisation.
+    """
+    with open(pan_json_path) as f:
+        pan_data = json.load(f)
+    cats = sorted(pan_data['categories'], key=lambda c: c['id'])
+    return {cat['id']: idx + 1 for idx, cat in enumerate(cats)}
+
+
+def load_gt_semseg(zip_file, stem_to_ann, id_mapping, pan_dir, stem, size=224):
+    """Load GT panoptic PNG from zip → (224, 224) int32 contiguous category map.
+
+    Uses the same contiguous id_mapping applied during tokenisation so that
+    predicted and GT class IDs are in the same space [0, 133].
+    """
     png_name = f'{pan_dir}/{stem}.png'
     try:
         raw = zip_file.read(png_name)
@@ -159,7 +176,8 @@ def load_gt_semseg(zip_file, stem_to_ann, pan_dir, stem, size=224):
 
     cat_map = np.zeros(seg_id_map.shape, dtype=np.int32)
     for seg in ann['segments_info']:
-        cat_map[seg_id_map == seg['id']] = seg['category_id']
+        mapped_id = id_mapping.get(seg['category_id'], 0)  # 0 = background/unknown
+        cat_map[seg_id_map == seg['id']] = mapped_id
 
     # Center-crop + resize (nearest) to 224×224 — same as tokenisation
     h, w = cat_map.shape
@@ -239,12 +257,13 @@ def main():
     print(f'\n{len(stems)} val images to evaluate')
 
     # ── Load panoptic GT (from zip) ───────────────────────────────────────────
-    ann_dir  = Path(args.coco_dir) / 'annotations'
-    zip_path = ann_dir / 'panoptic_val2017.zip'
+    ann_dir   = Path(args.coco_dir) / 'annotations'
+    zip_path  = ann_dir / 'panoptic_val2017.zip'
     json_path = ann_dir / 'panoptic_val2017.json'
     with open(json_path) as f:
         pan_data = json.load(f)
     stem_to_ann = {Path(a['file_name']).stem: a for a in pan_data['annotations']}
+    id_mapping  = build_id_mapping(json_path)   # non-contiguous → [1, 133]
 
     # ── Evaluation loop ───────────────────────────────────────────────────────
     meter    = IoUMeter(COCO_NUM_CLASSES)
@@ -262,8 +281,8 @@ def main():
                 np.load(rgb_tok_path).astype(np.int64)
             ).unsqueeze(0).to(device)
 
-            # Load GT semseg
-            gt = load_gt_semseg(zf, stem_to_ann, 'panoptic_val2017', stem)
+            # Load GT semseg (with same contiguous id remapping as tokenisation)
+            gt = load_gt_semseg(zf, stem_to_ann, id_mapping, 'panoptic_val2017', stem)
             if gt is None:
                 n_skip += 1
                 continue
@@ -272,17 +291,10 @@ def main():
             pred_tokens = generate_semseg_tokens(fm, rgb_tokens, device, dtype)
             pred = decode_semseg_tokens(semseg_tok, pred_tokens)
 
-            # After shift_idx_by_one during tokenisation, the decoded class IDs
-            # are shifted: pred value k corresponds to category_id k-1.
-            # Undo the shift to align with GT (which uses category_ids 1-133).
-            # Background (pred=0 after undo) is ignored in mIoU.
-            # Note: for evaluation we compare pred (shifted) vs gt (1-133) directly
-            # since the tokenizer was trained with shifted values and decodes them back
-            # in shifted space. We simply ignore the boundary:
-            #   gt class c → pred should output c+1 (shifted) → undo → c
-            pred_unshifted = np.clip(pred - 1, 0, COCO_NUM_CLASSES - 1)
-
-            meter.update(pred_unshifted, gt)
+            # pred is already in [0, 133] (argmax of VQVAE decoder logits).
+            # GT is also in [0, 133] via the same contiguous id_mapping.
+            # Class 0 = background/unknown, ignored in mIoU by IoUMeter.
+            meter.update(pred, gt)
             results.append({'stem': stem})
 
     miou = meter.mean_iou(ignore_background=True)

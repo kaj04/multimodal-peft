@@ -43,10 +43,10 @@ python eval_caption_coco.py \
     --lora_weights /scratch-shared/tesr125338/output/multitask/coco_rgb_caption_semseg_r8_attention/lora_weights-best.pth \
     --lora_rank    8 \
     --lora_modules attention \
-    --coco_root    /scratch-shared/tesr125338/coco \
-    --tokens_dir   /scratch-shared/tesr125338/coco_tokens/val \
+    --coco_root    /scratch-shared/tesr125338/coco/val2017 \
+    --coco_ann     /scratch-shared/tesr125338/coco/annotations/captions_val2017.json \
+    --max_images   0 \
     --output_dir   /scratch-shared/tesr125338/output/eval_caption/multitask_caption_semseg_r8 \
-    --run_name     multitask_caption_semseg_r8 \
     --device       cuda \
     --dtype        bfloat16
 

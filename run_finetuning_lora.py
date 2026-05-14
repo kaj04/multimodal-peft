@@ -1130,12 +1130,9 @@ def main(args):
                 start_steps=epoch * num_training_steps_per_epoch,
             )
 
-        # Save checkpoint
-        if args.output_dir and (epoch + 1) % args.save_ckpt_freq == 0:
-            utils.save_model(
-                args=args, model=model, model_without_ddp=model_without_ddp,
-                optimizer=optimizer, loss_scaler=loss_scaler, epoch=epoch,
-            )
+        # Periodic LoRA-only checkpoint (replaces 18 GB full-model saves)
+        if args.output_dir and utils.is_main_process() and (epoch + 1) % args.save_ckpt_freq == 0:
+            save_lora_weights(model_without_ddp, args.output_dir, tag=f'epoch{epoch}')
 
         # ── Evaluation ───────────────────────────────────────────────────────
         eval_stats = {}
@@ -1156,10 +1153,6 @@ def main(args):
                 best_loss = current_val_loss
                 patience_counter = 0
                 if args.output_dir and utils.is_main_process():
-                    utils.save_model(
-                        args=args, model=model, model_without_ddp=model_without_ddp,
-                        optimizer=optimizer, loss_scaler=loss_scaler, epoch='best',
-                    )
                     save_lora_weights(model_without_ddp, args.output_dir, tag='best')
                 print(f'  New best val loss: {best_loss:.4f}')
             else:
@@ -1213,15 +1206,14 @@ def main(args):
     print(f'Checkpoints saved to: {args.output_dir}')
 
     # Save LoRA-only weights at end of training (compact, shareable artifact)
+    # 'epoch' retains the last value of the loop (actual final epoch, even with early stopping)
     if args.output_dir and utils.is_main_process():
-        final_epoch = args.epochs - 1
-        save_lora_weights(model_without_ddp, args.output_dir, tag=f'epoch{final_epoch}')
+        save_lora_weights(model_without_ddp, args.output_dir, tag=f'epoch{epoch}')
         print(f'\nArtifacts in {args.output_dir}:')
-        print(f'  checkpoint-best.pth     — full model weights at best val loss (~9 GB)')
-        print(f'  lora_weights-best.pth   — LoRA adapter weights only (~60 MB) ← use this')
-        print(f'  lora_weights-epoch{final_epoch}.pth — LoRA adapter weights at final epoch')
-        print(f'  log.txt                 — per-epoch train/val loss (JSON lines)')
-        print(f'  config.yaml             — exact config used for this run')
+        print(f'  lora_weights-best.pth    — LoRA adapter weights at best val loss (~60 MB) ← use this')
+        print(f'  lora_weights-epoch{epoch}.pth — LoRA adapter weights at actual final epoch ({epoch})')
+        print(f'  log.txt                  — per-epoch train/val loss (JSON lines)')
+        print(f'  config.yaml              — exact config used for this run')
 
 
 if __name__ == '__main__':

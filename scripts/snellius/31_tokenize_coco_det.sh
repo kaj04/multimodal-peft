@@ -8,7 +8,7 @@
 #   sbatch scripts/snellius/31_tokenize_coco_det.sh
 # =============================================================================
 #SBATCH --job-name=tok_det
-#SBATCH --partition=thin
+#SBATCH --partition=rome
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G

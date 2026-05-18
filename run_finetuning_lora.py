@@ -99,7 +99,7 @@ def get_args():
 
     # --- Task (single-task mode) ---
     parser.add_argument('--task', default=None, type=str,
-                        choices=['semseg', 'depth', 'caption'],
+                        choices=['semseg', 'depth', 'caption', 'normal', 'det'],
                         help='Single downstream task. Mutually exclusive with --tasks.')
     parser.add_argument('--input_mod', default='tok_rgb@224', type=str,
                         help='Input modality key (must match MODALITY_INFO)')
@@ -191,9 +191,11 @@ def get_args():
 
     # Derive target_mod from task (single-task mode only)
     _TASK_TO_MOD = {
-        'semseg':  ('tok_semseg@224', 196),
-        'depth':   ('tok_depth@224',  196),
-        'caption': ('caption',         64),
+        'semseg':   ('tok_semseg@224', 196),
+        'depth':    ('tok_depth@224',  196),
+        'caption':  ('caption',         64),
+        'normal':   ('tok_normal@224', 196),
+        'det':      ('det',            256),
     }
     if args.tasks:
         # Multi-task: target_mod / num_target_tokens are per-task (in args.tasks list)
@@ -564,96 +566,105 @@ def train_one_epoch_multitask(
         log_writer=None,
         start_steps: int = 0,
 ):
+    """Multi-task training with proportional random scheduling.
+
+    Each task contributes len(its DataLoader) steps per epoch — proportional to
+    dataset size. Steps are globally shuffled (not round-robin) so the model
+    sees tasks in random order, eliminating periodic gradient artifacts.
+    """
     model.train()
     metric_logger = utils.MetricLogger(delimiter='  ')
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.2e}'))
     header = f'Epoch [{epoch}] (multi-task)'
-    print_freq = 50
+    print_freq = 100
 
     optimizer.zero_grad()
 
-    n_tasks = len(task_cfgs)
-    # One iterator per task; we zip them and alternate tasks per step
+    # Build proportional schedule: task_idx repeated len(loader) times per task,
+    # then shuffled globally so the order is random each epoch.
+    schedule = []
+    for task_idx, dl in enumerate(task_loaders):
+        schedule.extend([task_idx] * len(dl))
+    rng = np.random.default_rng(epoch)
+    rng.shuffle(schedule)
+
     iterators = [iter(dl) for dl in task_loaders]
-    n_steps_per_task = min(len(dl) for dl in task_loaders)
 
-    global_step = start_steps
-    for base_step in range(n_steps_per_task):
-        for task_idx, (loader_iter, tcfg) in enumerate(zip(iterators, task_cfgs)):
-            try:
-                input_tokens, target_tokens = next(loader_iter)
-            except StopIteration:
-                continue
+    for step, task_idx in enumerate(
+            metric_logger.log_every(schedule, print_freq, header=header)):
 
-            it = global_step
+        it = start_steps + step
 
-            if lr_schedule_values is not None:
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr_schedule_values[min(it, len(lr_schedule_values) - 1)]
-            if wd_schedule_values is not None:
-                for param_group in optimizer.param_groups:
-                    if param_group.get('weight_decay', 0) > 0:
-                        param_group['weight_decay'] = wd_schedule_values[min(it, len(wd_schedule_values) - 1)]
+        if lr_schedule_values is not None:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr_schedule_values[min(it, len(lr_schedule_values) - 1)]
+        if wd_schedule_values is not None:
+            for param_group in optimizer.param_groups:
+                if param_group.get('weight_decay', 0) > 0:
+                    param_group['weight_decay'] = wd_schedule_values[min(it, len(wd_schedule_values) - 1)]
 
-            input_tokens  = input_tokens.to(device, non_blocking=True)
-            target_tokens = target_tokens.to(device, non_blocking=True)
+        try:
+            input_tokens, target_tokens = next(iterators[task_idx])
+        except StopIteration:
+            # Reset iterator if exhausted (shouldn't happen, but defensive)
+            iterators[task_idx] = iter(task_loaders[task_idx])
+            input_tokens, target_tokens = next(iterators[task_idx])
 
-            target_mod        = tcfg['target_mod']
-            num_target_tokens = tcfg['num_target_tokens']
+        tcfg = task_cfgs[task_idx]
+        target_mod        = tcfg['target_mod']
+        num_target_tokens = tcfg['num_target_tokens']
+        task_name         = tcfg.get('name', f'task{task_idx}')
 
-            mod_dict = build_mod_dict(
-                input_tokens, target_tokens,
-                input_mod=args.input_mod,
-                target_mod=target_mod,
-                num_input_tokens=args.num_input_tokens,
-                num_target_tokens=num_target_tokens,
+        input_tokens  = input_tokens.to(device, non_blocking=True)
+        target_tokens = target_tokens.to(device, non_blocking=True)
+
+        mod_dict = build_mod_dict(
+            input_tokens, target_tokens,
+            input_mod=args.input_mod,
+            target_mod=target_mod,
+            num_input_tokens=args.num_input_tokens,
+            num_target_tokens=num_target_tokens,
+        )
+
+        with torch.cuda.amp.autocast(enabled=(args.dtype in ['float16', 'fp16']),
+                                      dtype=torch.bfloat16 if args.dtype in ['bfloat16', 'bf16'] else torch.float16):
+            loss, mod_loss = model(
+                mod_dict,
+                num_encoder_tokens=args.num_input_tokens,
+                num_decoder_tokens=num_target_tokens,
+                loss_type=args.loss_type,
             )
 
-            with torch.cuda.amp.autocast(enabled=(args.dtype in ['float16', 'fp16']),
-                                          dtype=torch.bfloat16 if args.dtype in ['bfloat16', 'bf16'] else torch.float16):
-                loss, mod_loss = model(
-                    mod_dict,
-                    num_encoder_tokens=args.num_input_tokens,
-                    num_decoder_tokens=num_target_tokens,
-                    loss_type=args.loss_type,
-                )
+        target_loss_value = mod_loss[target_mod].item()
+        loss_value        = loss.item()
+        if not math.isfinite(loss_value):
+            print(f'Loss is {loss_value}, stopping training.')
+            sys.exit(1)
 
-            target_loss_value = mod_loss[target_mod].item()
-            loss_value        = loss.item()
-            if not math.isfinite(loss_value):
-                print(f'Loss is {loss_value}, stopping training.')
-                sys.exit(1)
+        loss = loss / args.accum_iter
+        grad_norm = loss_scaler(
+            loss, optimizer,
+            clip_grad=args.clip_grad,
+            parameters=[p for p in model.parameters() if p.requires_grad],
+            update_grad=((step + 1) % args.accum_iter == 0),
+        )
+        if (step + 1) % args.accum_iter == 0:
+            optimizer.zero_grad()
 
-            loss = loss / args.accum_iter
-            grad_norm = loss_scaler(
-                loss, optimizer,
-                clip_grad=args.clip_grad,
-                parameters=[p for p in model.parameters() if p.requires_grad],
-                update_grad=((global_step + 1) % args.accum_iter == 0),
-            )
-            if (global_step + 1) % args.accum_iter == 0:
-                optimizer.zero_grad()
+        torch.cuda.synchronize()
 
-            torch.cuda.synchronize()
+        metric_logger.update(**{f'loss_{task_name}': target_loss_value})
+        metric_logger.update(lr=optimizer.param_groups[0]['lr'])
+        if grad_norm is not None:
+            metric_logger.update(grad_norm=grad_norm)
 
-            task_name = tcfg.get('name', f'task{task_idx}')
-            metric_logger.update(**{f'loss_{task_name}': target_loss_value})
-            metric_logger.update(lr=optimizer.param_groups[0]['lr'])
-            if grad_norm is not None:
-                metric_logger.update(grad_norm=grad_norm)
-
-            if log_writer is not None and (global_step + 1) % args.accum_iter == 0:
-                log_writer.update({
-                    f'train/loss_{task_name}': target_loss_value,
-                    'train/lr':               optimizer.param_groups[0]['lr'],
-                    'train/grad_norm':         grad_norm if grad_norm is not None else 0.0,
-                    'train/step':             it,
-                })
-
-            if (base_step * n_tasks + task_idx) % print_freq == 0:
-                metric_logger.log_every([], print_freq, header=header)
-
-            global_step += 1
+        if log_writer is not None and (step + 1) % args.accum_iter == 0:
+            log_writer.update({
+                f'train/loss_{task_name}': target_loss_value,
+                'train/lr':               optimizer.param_groups[0]['lr'],
+                'train/grad_norm':         grad_norm if grad_norm is not None else 0.0,
+                'train/step':             it,
+            })
 
     metric_logger.synchronize_between_processes()
     print(f'[Train MT] Averaged stats: {metric_logger}')
@@ -934,24 +945,32 @@ def main(args):
                 drop_last=drop_last,
             )
 
+        # Per-task data paths: each task cfg can override args.data_path /
+        # args.eval_data_path so tasks from different datasets (e.g. COCO vs
+        # NYUv2) can live in separate directories.
         train_datasets, data_loaders_train = zip(*[
-            _make_loader(args.data_path, t['target_mod'], shuffle=True, drop_last=True)
+            _make_loader(
+                t.get('data_path', args.data_path),
+                t['target_mod'], shuffle=True, drop_last=True,
+            )
             for t in task_cfgs
         ])
         data_loaders_train = list(data_loaders_train)
 
         val_datasets, data_loaders_val = [], []
-        if args.eval_data_path:
+        if args.eval_data_path or any('eval_data_path' in t for t in task_cfgs):
             val_datasets, data_loaders_val = zip(*[
-                _make_loader(args.eval_data_path, t['target_mod'], shuffle=False, drop_last=False)
+                _make_loader(
+                    t.get('eval_data_path', args.eval_data_path),
+                    t['target_mod'], shuffle=False, drop_last=False,
+                )
                 for t in task_cfgs
             ])
             data_loaders_val = list(data_loaders_val)
 
-        # Steps/epoch = n_tasks × min loader length (balanced interleaving)
-        num_training_steps_per_epoch = (
-            min(len(dl) for dl in data_loaders_train) * len(task_cfgs)
-        )
+        # Steps/epoch = sum of all loader lengths (proportional to dataset size).
+        # With proportional random scheduling each task contributes len(loader) steps.
+        num_training_steps_per_epoch = sum(len(dl) for dl in data_loaders_train)
 
         # Placeholders so the rest of main() compiles in single-task path
         data_loader_train = None

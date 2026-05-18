@@ -1,0 +1,50 @@
+# LoRA fine-tuning on COCO panoptic semseg (133 classes, contiguous remapping)
+#
+# Run 25: rank=8, attention, dropout=0.1 — semseg-only baseline.
+# Fair comparison with run 26 (multitask): same LoRA config, single task.
+#
+# Train: 10k COCO images (seed=42, same tok_semseg from run 24)
+# Val:   5k COCO val2017
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: attention
+lora_dropout: 0.1
+
+# Task
+task: semseg
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+# Training — 4 GPUs x bs=2 x accum=4 = 32 effective batch (same as run 26)
+epochs: 50
+batch_size: 2
+accum_iter: 4
+blr: 3.0e-5
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 1
+save_ckpt_freq: 10
+early_stop_patience: 10
+
+# Data
+data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+num_workers: 8
+
+# Output
+output_dir: '/scratch-shared/tesr125338/output/semseg/coco_rgb_r8_attention'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_semseg_coco_r8_attention'

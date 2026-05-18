@@ -1,0 +1,52 @@
+# LoRA fine-tuning on NYUv2 depth (labeled split, 795 train / 654 val)
+#
+# Run 37: rank=8, attention, dropout=0.1 — depth-only baseline.
+# Fair comparison with run 34 (5-task multitask): identical LoRA config.
+# NOTE: previous best depth run (run 15) used selfattn+drop=0.05; this uses
+# attention (selfattn+crossattn) to match the multitask LoRA structure.
+#
+# Train: 795 NYUv2 images (labeled split, tok_depth from run 13)
+# Val:   654 NYUv2 test images (= Eigen val split)
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: attention
+lora_dropout: 0.1
+
+# Task
+task: depth
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+num_target_tokens: 196
+loss_type: mod
+
+# Training — 4 GPUs x bs=2 x accum=4 = 32 effective batch (same as run 34)
+epochs: 50
+batch_size: 2
+accum_iter: 4
+blr: 3.0e-5
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 1
+save_ckpt_freq: 10
+early_stop_patience: 10
+
+# Data
+data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/train'
+eval_data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/val'
+num_workers: 4
+
+# Output
+output_dir: '/scratch-shared/tesr125338/output/depth/nyu_labeled_r8_attention'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_depth_nyu_labeled_r8_attention'

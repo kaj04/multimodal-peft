@@ -149,23 +149,25 @@ def run_det(args, out_root):
 
 
 def run_depth(args, out_root):
+    # eval_depth.py writes to output_dir/run_name/results.json
+    # → set output_dir=out_root, run_name='depth' so results land at out_root/depth/results.json
     out = str(out_root / 'depth')
     cmd = [
         sys.executable, 'eval_depth.py',
-        '--nyu_raw',      args.nyu_raw,
-        '--tokens_dir',   args.nyu_tokens_val,
-        '--run_name',     args.run_name,
-        '--max_images',   str(args.max_images),
-        '--output_dir',   out,
+        '--dataset',      'nyu',
+        '--dataset_root', f'{args.nyu_raw}/test',
+        '--run_name',     'depth',
+        '--output_dir',   str(out_root),
         '--device',       args.device,
         '--dtype',        args.dtype,
     ]
+    if args.max_images > 0:
+        cmd += ['--max_images', str(args.max_images)]
     if args.lora_weights:
         cmd += ['--lora_weights', args.lora_weights,
                 '--lora_rank',    str(args.lora_rank),
                 '--lora_modules', args.lora_modules]
-    if args.hf_cache:
-        cmd += ['--hf_cache', args.hf_cache]
+    # eval_depth.py has no --hf_cache arg; relies on HF_HOME env var (set in SLURM)
     return _run(cmd, 'depth'), out
 
 
@@ -198,11 +200,14 @@ def collect_caption(out_dir):
         return None
     with open(p) as f:
         d = json.load(f)
+    # eval_caption_coco.py writes metrics nested under 'caption_lora' (LoRA run)
+    # or 'baseline' (no LoRA). Prefer 'caption_lora', fall back to 'baseline', then flat.
+    m = d.get('caption_lora') or d.get('baseline') or d
     return {
-        'CIDEr':  round(d.get('CIDEr',  -1), 4),
-        'BLEU4':  round(d.get('Bleu_4', -1), 4),
-        'METEOR': round(d.get('METEOR', -1), 4),
-        'ROUGE_L':round(d.get('ROUGE_L',-1), 4),
+        'CIDEr':  round(m.get('CIDEr',  -1), 4),
+        'BLEU4':  round(m.get('Bleu_4', -1), 4),
+        'METEOR': round(m.get('METEOR', -1), 4),
+        'ROUGE_L':round(m.get('ROUGE_L',-1), 4),
     }
 
 
@@ -233,10 +238,12 @@ def collect_depth(out_dir):
         return None
     with open(p) as f:
         d = json.load(f)
+    # eval_depth.py writes nested: d['summary']['metrics_all']['all'] with lowercase keys
+    m = d.get('summary', {}).get('metrics_all', {}).get('all', {})
     return {
-        'AbsRel': round(d.get('AbsRel', -1), 4),
-        'delta1': round(d.get('delta1', -1), 4),
-        'RMSE':   round(d.get('RMSE',   -1), 4),
+        'AbsRel': round(m.get('abs_rel', -1), 4),
+        'delta1': round(m.get('delta1',  -1), 4),
+        'RMSE':   round(m.get('rmse',    -1), 4),
     }
 
 
@@ -246,11 +253,9 @@ def collect_normal(out_dir):
         return None
     with open(p) as f:
         d = json.load(f)
+    # eval_normal_nyu.py now reports token_acc (VQVAE decoder unavailable)
     return {
-        'mean_angle_err': round(d.get('mean_angle_err', -1), 2),
-        'within_11_25':   round(d.get('within_11_25',   -1), 4),
-        'within_22_5':    round(d.get('within_22_5',    -1), 4),
-        'within_30':      round(d.get('within_30',      -1), 4),
+        'token_acc': round(d.get('token_acc', -1), 6),
     }
 
 

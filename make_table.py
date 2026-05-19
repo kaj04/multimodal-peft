@@ -33,13 +33,12 @@ COLUMNS = [
     # Depth
     ('depth',   'AbsRel',          'AbsRel↓'),
     ('depth',   'delta1',          'δ₁↑'),
-    # Normal
-    ('normal',  'mean_angle_err',  'Angle↓'),
-    ('normal',  'within_11_25',    '<11.25°'),
+    # Normal (token-level; VQVAE unet_patched decoder not available in ml-4m)
+    ('normal',  'token_acc',       'Tok.Acc↑'),
 ]
 
 # For "lower is better" metrics, mark with ↓
-LOWER_IS_BETTER = {'AbsRel', 'mean_angle_err', 'Angle↓'}
+LOWER_IS_BETTER = {'AbsRel'}
 
 
 def get_args():

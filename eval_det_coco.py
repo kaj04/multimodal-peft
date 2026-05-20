@@ -226,11 +226,12 @@ def main():
             n_skip += 1
             continue
 
-        # Decode token IDs → string
+        # Decode token IDs → string using id_to_token (tok_text.decode() returns
+        # empty for detection tokens because they are not standard wordpiece subwords)
         ids = det_tokens.squeeze(0).cpu().tolist()
-        # Strip padding zeros and EOS
-        ids = [i for i in ids if i > 0]
-        text = tok_text.decode(ids) if ids else ''
+        parts = [tok_text.id_to_token(i) for i in ids
+                 if i > 0 and tok_text.id_to_token(i) is not None]
+        text = ' '.join(parts)
 
         dets = parse_det_string(text, name_to_id, img_w, img_h)
         for d in dets:

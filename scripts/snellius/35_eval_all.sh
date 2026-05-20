@@ -37,27 +37,35 @@ cd "$REPO_ROOT"
 
 # ── Edit these two variables before submitting ────────────────────────────────
 RUN_NAME="${RUN_NAME:-run34_5task}"
-LORA_WEIGHTS="${LORA:-/scratch-shared/tesr125338/output/multitask/coco_nyu_5task_r8_attention/lora_weights-best.pth}"
+LORA_WEIGHTS="${LORA}"   # empty string = baseline (no LoRA); set via --export=ALL,LORA=...
 OUTPUT_DIR="/scratch-shared/tesr125338/output/eval_all/${RUN_NAME}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 echo "================================================================"
 echo "  eval_all — ${RUN_NAME}"
-echo "  LoRA    : ${LORA_WEIGHTS}"
+echo "  LoRA    : ${LORA_WEIGHTS:-<baseline, no LoRA>}"
 echo "  Output  : ${OUTPUT_DIR}"
 echo "  Tasks   : caption semseg det depth normal"
 echo "  Started : $(date)"
 echo "================================================================"
 
-python eval_all.py \
-    --lora_weights  "${LORA_WEIGHTS}" \
-    --lora_rank     8 \
-    --lora_modules  attention \
-    --run_name      "${RUN_NAME}" \
-    --output_dir    "${OUTPUT_DIR}" \
-    --tasks         caption semseg det depth normal \
-    --device        cuda \
+# Build python command — omit --lora_weights entirely for baseline
+PYTHON_ARGS=(
+    --run_name      "${RUN_NAME}"
+    --output_dir    "${OUTPUT_DIR}"
+    --tasks         caption semseg det depth normal
+    --device        cuda
     --dtype         bfloat16
+)
+if [ -n "${LORA_WEIGHTS}" ]; then
+    PYTHON_ARGS+=(
+        --lora_weights  "${LORA_WEIGHTS}"
+        --lora_rank     8
+        --lora_modules  attention
+    )
+fi
+
+python eval_all.py "${PYTHON_ARGS[@]}"
 
 echo ""
 echo "================================================================"

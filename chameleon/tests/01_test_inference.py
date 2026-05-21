@@ -123,7 +123,8 @@ def test_image_captioning(model, processor):
     # Maradona at Napoli — public domain, Wikimedia Commons
     img_url = 'https://commons.wikimedia.org/wiki/Special:FilePath/Diego_Maradona_Napoli.JPG'
     try:
-        response = requests.get(img_url, timeout=10)
+        response = requests.get(img_url, timeout=10, allow_redirects=True,
+                               headers={'User-Agent': 'Mozilla/5.0'})
         image = Image.open(io.BytesIO(response.content)).convert('RGB')
         print(f'  Test image: {image.size} pixels (downloaded)')
     except Exception as e:

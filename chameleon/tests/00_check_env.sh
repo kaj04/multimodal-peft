@@ -67,10 +67,14 @@ except ImportError:
 
 # HuggingFace login
 print()
-import os
-token = os.environ.get('HF_TOKEN') or os.path.expanduser('~/.cache/huggingface/token')
-import pathlib
-if pathlib.Path(token).exists():
+import os, pathlib
+hf_home = os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface'))
+candidates = [
+    os.environ.get('HF_TOKEN', ''),
+    str(pathlib.Path(hf_home) / 'token'),
+    os.path.expanduser('~/.cache/huggingface/token'),
+]
+if any(pathlib.Path(c).exists() for c in candidates if c):
     print("HF token: found in cache  ✓")
 else:
     print("HF token: NOT FOUND")

@@ -1,7 +1,11 @@
 # LoRA fine-tuning on COCO detection (object detection, det modality)
 #
-# Run 36: rank=8, attention, dropout=0.1 — det-only baseline.
-# Fair comparison with run 34 (5-task multitask): identical LoRA config.
+# Run 36b: rank=8, attention, dropout=0.1 — det-only baseline.
+# FIXED vs run 36: padding tokens (id=0) are excluded from the loss via
+# build_mod_dict(mask_padding=True).  With ~85% padding in det sequences,
+# the original run learned to predict zeros in 2 epochs and early-stopped
+# before learning actual detection. Fix makes the loss informative.
+# Patience raised 10→20 to give the model time to learn past the warmup.
 #
 # Train: 10k COCO images (same tok_det from run 31)
 # Val:   5k COCO val2017
@@ -34,7 +38,7 @@ clip_grad: 1.0
 warmup_epochs: 5
 eval_freq: 1
 save_ckpt_freq: 10
-early_stop_patience: 10
+early_stop_patience: 20
 
 # Data
 data_path: '/scratch-shared/tesr125338/coco_tokens/train'
@@ -42,10 +46,10 @@ eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
 num_workers: 8
 
 # Output
-output_dir: '/scratch-shared/tesr125338/output/det/coco_rgb_r8_attention'
+output_dir: '/scratch-shared/tesr125338/output/det/coco_rgb_r8_attention_v2'
 
 # WandB
 log_wandb: true
 wandb_project: '4M-PEFT'
 wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
-wandb_run_name: 'lora_det_coco_r8_attention'
+wandb_run_name: 'lora_det_coco_r8_attention_v2_padfix'

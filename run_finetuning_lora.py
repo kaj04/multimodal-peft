@@ -325,7 +325,8 @@ def build_mod_dict(input_tokens: torch.Tensor,
                    input_mod: str,
                    target_mod: str,
                    num_input_tokens: int,
-                   num_target_tokens: int) -> Dict[str, Dict[str, torch.Tensor]]:
+                   num_target_tokens: int,
+                   mask_padding: bool = True) -> Dict[str, Dict[str, torch.Tensor]]:
     """Build a 4M-compatible mod_dict for single-input → single-target fine-tuning.
 
     The input modality tokens are all visible to the encoder (input_mask=False).
@@ -339,12 +340,26 @@ def build_mod_dict(input_tokens: torch.Tensor,
         target_mod: modality key string (e.g. 'tok_semseg@224')
         num_input_tokens:  number of input token positions
         num_target_tokens: number of target token positions
+        mask_padding: if True (default), exclude pad tokens (id=0) from the loss.
+            For sparse sequence modalities (det, caption) ~80-85% of token positions
+            are padding. Without this flag the loss is dominated by padding and the
+            model learns to predict zeros long before learning the real task, causing
+            spurious fast convergence and early-stopping too early.
+            For dense modalities (depth, semseg, normal) every position is a real VQ
+            code so this has no effect. Safe to leave True for all tasks.
 
     Returns:
         mod_dict compatible with FourM.forward()
     """
     B = input_tokens.shape[0]
     device = input_tokens.device
+
+    # target_mask=True  → 4M excludes that position from the cross-entropy loss.
+    # Mask out padding (id=0) positions so the loss is computed only on real tokens.
+    if mask_padding:
+        target_mask = (target_tokens == 0)   # True where pad → not predicted
+    else:
+        target_mask = torch.zeros((B, num_target_tokens), dtype=torch.bool, device=device)
 
     mod_dict = {
         # Input modality: fully visible, not predicted
@@ -354,11 +369,11 @@ def build_mod_dict(input_tokens: torch.Tensor,
             'target_mask': torch.ones((B, num_input_tokens), dtype=torch.bool, device=device),
             'decoder_attention_mask': torch.zeros((B, num_input_tokens), dtype=torch.int, device=device),
         },
-        # Target modality: fully hidden, all predicted
+        # Target modality: fully hidden; only non-padding positions predicted
         target_mod: {
             'tensor': target_tokens,
             'input_mask': torch.ones((B, num_target_tokens), dtype=torch.bool, device=device),
-            'target_mask': torch.zeros((B, num_target_tokens), dtype=torch.bool, device=device),
+            'target_mask': target_mask.to(device=device),
             'decoder_attention_mask': torch.ones((B, num_target_tokens), dtype=torch.int, device=device),
         },
     }

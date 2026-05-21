@@ -1,15 +1,15 @@
 # LoRA fine-tuning on COCO captioning (RGB → text)
 #
-# Run 23: rank=8, selfattn+crossattn (attention), dropout=0.1, blr=3e-5
-# Extends run 20 (r4/selfattn) by:
-#   - Adding cross-attention LoRA — directly modifies the visual→text channel
-#   - Doubling rank (4→8) for more capacity
-# Cross-attention is the primary mechanism for visually-grounded caption
-# generation in 4M; selfattn-only (run 20) showed minimal improvement.
+# Run 23b: rank=8, selfattn+crossattn (attention), dropout=0.1, blr=3e-5
+# FIXED vs run 23: padding tokens (id=0) are excluded from the loss via
+# build_mod_dict(mask_padding=True).  With ~80% padding in caption sequences
+# (avg caption = 12 tokens on 64 positions), run 23 learned to predict zeros
+# in 2 epochs → val/token_acc=0.787 ≈ all-zeros baseline (0.806).
+# Fix makes the loss computed only on real caption tokens.
+# Patience raised 10→20 to allow proper convergence.
 #
-# Train subset: 10k images sampled from COCO train2017 (seed=42, same as runs 19/20).
-# Val: full COCO val2017 (5000 images). eval_freq=1 + patience=10 for fine-grained
-# early stopping with enough patience to escape local minima.
+# Train subset: 10k images sampled from COCO train2017 (seed=42).
+# Val: full COCO val2017 (5000 images).
 
 pretrained_model: 'EPFL-VILAB/4M-21_XL'
 dtype: bfloat16
@@ -39,7 +39,7 @@ clip_grad: 1.0
 warmup_epochs: 5
 eval_freq: 1
 save_ckpt_freq: 10
-early_stop_patience: 10
+early_stop_patience: 20
 
 # Data (output of scripts/prepare_coco.py --n_train 10000 --seed 42)
 data_path: '/scratch-shared/tesr125338/coco_tokens/train'
@@ -47,10 +47,10 @@ eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
 num_workers: 8
 
 # Output
-output_dir: '/scratch-shared/tesr125338/output/caption/coco_rgb_r8_attention_drop01'
+output_dir: '/scratch-shared/tesr125338/output/caption/coco_rgb_r8_attention_v2'
 
 # WandB
 log_wandb: true
 wandb_project: '4M-PEFT'
 wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
-wandb_run_name: 'lora_caption_coco_r8_attention_drop01'
+wandb_run_name: 'lora_caption_coco_r8_attention_v2_padfix'

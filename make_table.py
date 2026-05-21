@@ -94,9 +94,9 @@ def build_table(rows):
 
     # Find best per column (for bold)
     best_idx = []
-    for col_i, (_, _, display) in enumerate(COLUMNS):
+    for col_i, (_, metric, display) in enumerate(COLUMNS):
         col_vals = [data[row_i][col_i] for row_i in range(len(rows))]
-        lb = display in LOWER_IS_BETTER
+        lb = metric in LOWER_IS_BETTER or display in LOWER_IS_BETTER
         best_idx.append(best_value(col_vals, lb))
 
     return run_names, col_headers, data, best_idx

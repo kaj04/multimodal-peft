@@ -43,8 +43,8 @@ COCO_NUM_CLASSES      = 134   # 0 = background/ignored, 1-133 = semantic classes
 
 def get_args():
     p = argparse.ArgumentParser(description='Evaluate semseg LoRA on COCO val2017')
-    p.add_argument('--lora_weights', required=True,
-                   help='Path to lora_weights-best.pth')
+    p.add_argument('--lora_weights', default=None,
+                   help='Path to lora_weights-best.pth (None = baseline, no LoRA)')
     p.add_argument('--lora_rank',    default=8, type=int)
     p.add_argument('--lora_modules', default='attention', type=str)
     p.add_argument('--coco_dir',     required=True,
@@ -72,14 +72,16 @@ def load_model(args, device, dtype):
     print(f'Loading FM: {FM_MODEL}')
     fm = FM.from_pretrained(FM_MODEL, cache_dir=args.hf_cache)
 
-    target_mods = get_LoRA_module_names(args.lora_modules)
-    inject_trainable_LoRA(fm, rank=args.lora_rank, scale=1.0,
-                          target_replace_modules=target_mods)
-
-    lora_sd = torch.load(args.lora_weights, map_location='cpu')
-    missing, unexpected = fm.load_state_dict(lora_sd, strict=False)
-    print(f'  Loaded {len(lora_sd)} LoRA tensors '
-          f'(missing={len(missing)}, unexpected={len(unexpected)})')
+    if args.lora_weights:
+        target_mods = get_LoRA_module_names(args.lora_modules)
+        inject_trainable_LoRA(fm, rank=args.lora_rank, scale=1.0,
+                              target_replace_modules=target_mods)
+        lora_sd = torch.load(args.lora_weights, map_location='cpu')
+        missing, unexpected = fm.load_state_dict(lora_sd, strict=False)
+        print(f'  Loaded {len(lora_sd)} LoRA tensors '
+              f'(missing={len(missing)}, unexpected={len(unexpected)})')
+    else:
+        print('  No LoRA weights — evaluating baseline (pretrained 4M-21 only)')
 
     fm = fm.to(device=device, dtype=dtype).eval()
     return fm

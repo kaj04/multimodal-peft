@@ -60,7 +60,7 @@ def inspect_training_log(log_path, label=''):
 
     lines = [json.loads(l) for l in p.read_text().strip().splitlines() if l.strip()]
 
-    print(f'  {'Epoch':>6}  {'train/loss':>12}  {'val/loss':>12}  {'val/token_acc':>14}')
+    print('  {:>6}  {:>12}  {:>12}  {:>14}'.format('Epoch', 'train/loss', 'val/loss', 'val/token_acc'))
     print(f'  {"-"*50}')
     for log in lines[:30]:   # first 30 epochs
         epoch      = log.get('epoch', '?')

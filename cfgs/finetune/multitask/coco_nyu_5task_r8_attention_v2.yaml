@@ -1,0 +1,85 @@
+# Multi-task LoRA: 5 tasks across COCO (caption + semseg + det) and NYUv2 (depth + normal)
+#
+# Run 40 (v2): FIXED vs run 34 — padding tokens (id=0) are excluded from
+# the loss via build_mod_dict(mask_padding=True).
+#
+# In run 34, caption (~80% pad) and det (~85% pad) dominated the mean_loss
+# with trivial padding prediction after 2-5 epochs. The LoRA adapter stopped
+# learning caption/det before convergence, while semseg/depth/normal continued
+# to improve. The mean loss plateau triggered early stopping too early.
+#
+# Sampling: proportional to dataset size + random shuffle per epoch.
+#   COCO tasks: ~10k images each → ~5000 batches each (bs=2)
+#   NYUv2 tasks: ~795 images each → ~397 batches each (bs=2)
+#   Total steps/epoch ≈ 3×5000 + 2×397 ≈ 15794
+#
+# Early stopping on mean(val_loss across 5 tasks), patience raised 15→25.
+
+pretrained_model: 'EPFL-VILAB/4M-21_XL'
+dtype: bfloat16
+
+# LoRA (shared adapter across all 5 tasks)
+lora_rank: 8
+lora_scale: 1.0
+lora_modules: attention
+lora_dropout: 0.1
+
+# Multi-task config: per-task data paths allow mixing COCO and NYUv2
+tasks:
+  - name: caption
+    target_mod: caption
+    num_target_tokens: 64
+    data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+    eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+  - name: semseg
+    target_mod: tok_semseg@224
+    num_target_tokens: 196
+    data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+    eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+  - name: det
+    target_mod: det
+    num_target_tokens: 256
+    data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+    eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+  - name: depth
+    target_mod: tok_depth@224
+    num_target_tokens: 196
+    data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/train'
+    eval_data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/val'
+  - name: normal
+    target_mod: tok_normal@224
+    num_target_tokens: 196
+    data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/train'
+    eval_data_path: '/scratch-shared/tesr125338/nyu_tokens_labeled/val'
+
+# Shared input
+input_mod: 'tok_rgb@224'
+num_input_tokens: 196
+loss_type: mod
+
+# Training
+epochs: 50
+batch_size: 2
+accum_iter: 4
+blr: 3.0e-5
+min_blr: 0.0
+weight_decay: 0.05
+clip_grad: 1.0
+warmup_epochs: 5
+eval_freq: 1
+save_ckpt_freq: 10
+early_stop_patience: 25
+
+# data_path / eval_data_path at top level act as fallback if a task has no per-task path
+data_path: '/scratch-shared/tesr125338/coco_tokens/train'
+eval_data_path: '/scratch-shared/tesr125338/coco_tokens/val'
+num_workers: 4
+
+# Output
+output_dir: '/scratch-shared/tesr125338/output/multitask/coco_nyu_5task_r8_attention_v2'
+
+# WandB
+log_wandb: true
+wandb_project: '4M-PEFT'
+wandb_entity: 'francesco-colasurdo04-eindhoven-university-of-technology'
+wandb_run_name: 'lora_5task_coco_nyu_r8_attention_v2_padfix'

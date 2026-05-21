@@ -1,117 +1,92 @@
-# 4M-PEFT
+# Multimodal PEFT — Early Fusion Model Study
 
-Parameter-Efficient Fine-Tuning of native multimodal models for dense prediction tasks.
+A systematic study of **Parameter-Efficient Fine-Tuning (LoRA)** on early fusion
+multimodal models, where all modalities share a unified token representation.
 
-This repository investigates LoRA-based fine-tuning of [4M-21](https://github.com/apple/ml-4m) on dense downstream tasks (semantic segmentation, depth estimation), working toward modality-aware and multi-task PEFT on native multimodal architectures.
+> **Research question**: How does LoRA fine-tuning behave in models where text, images,
+> and other modalities are represented in the same discrete token space? Do cross-task
+> transfer patterns differ from late-fusion architectures?
 
-## Structure
+## Models
+
+| Model | Architecture | Token space | Code |
+|-------|-------------|-------------|------|
+| [4M-21-XL](https://huggingface.co/EPFL-VILAB/4M-21_XL) | Encoder-decoder transformer | Per-modality VQ codes | root level |
+| [Chameleon-7B](https://huggingface.co/facebook/chameleon-7b) | Single transformer | Interleaved text+image | `chameleon/` |
+
+## Key findings (4M-21-XL)
+
+- **Multi-task LoRA** outperforms single-task on caption and detection
+- **Sparse token sequences** (caption ~80% padding, det ~85%) cause premature
+  convergence without padding masking — fixed via `mask_padding=True` in `build_mod_dict`
+- **Asymmetric cross-task transfer**: caption LoRA improves semseg (+44% vs baseline),
+  while semseg LoRA degrades general visual encoding → semantic tasks transfer better
+  than VQ-code-prediction tasks
+
+## Repository structure
 
 ```
-4m-peft/
-├── ml-4m/                        # git submodule (apple/ml-4m) — core fourm library
-├── run_finetuning_lora.py        # Main fine-tuning script (LoRA on 4M-21)
-├── cfgs/finetune/
+multimodal-peft/
+│
+├── ml-4m/                      # 4M codebase (submodule, read-only)
+├── cfgs/finetune/              # LoRA training configs (4M)
+│   ├── caption/
 │   ├── semseg/
-│   │   ├── nyu_rgb_r8.yaml       # NYUv2 semseg, rank=8  (paper baseline)
-│   │   └── ade20k_rgb_r64.yaml   # ADE20K semseg, rank=64 (paper baseline)
-│   └── depth/
-│       └── nyu_rgb_r8.yaml       # NYUv2 depth, rank=8
-└── scripts/snellius/
-    ├── 00_setup_env.sh           # One-time env setup on Snellius
-    ├── 01_tokenize_nyu.sh        # Pre-tokenize NYUv2 dataset
-    ├── 02_dry_run.sh             # Validate LoRA injection (no data needed)
-    ├── 03_ft_semseg_nyu.sh       # Fine-tune semseg on NYUv2
-    └── 04_ft_depth_nyu.sh        # Fine-tune depth on NYUv2
+│   ├── det/
+│   ├── depth/
+│   ├── normal/
+│   └── multitask/
+├── scripts/snellius/           # SLURM job scripts (4M)
+├── run_finetuning_lora.py      # LoRA training script (4M)
+├── eval_all.py                 # Run all 5 task evals → row.json
+├── eval_caption_coco.py        # CIDEr / BLEU-4 on COCO val2017
+├── eval_semseg_coco.py         # mIoU on COCO panoptic val2017
+├── eval_det_coco.py            # AP50 / AP on COCO val2017
+├── eval_depth.py               # AbsRel / delta1 on NYUv2
+├── eval_normal_nyu.py          # Token accuracy on NYUv2 normals
+├── make_table.py               # Aggregate row.json -> markdown + LaTeX table
+│
+└── chameleon/                  # Chameleon-7B experiments
+    ├── tests/                  # Setup verification + inference tests
+    ├── cfgs/                   # Training configs (coming)
+    ├── scripts/                # SLURM scripts (coming)
+    └── README.md
 ```
 
-## Quick Start
+## Reproducing 4M-21 experiments
 
-### 1. Clone (with submodule)
+### Environment
 ```bash
-git clone --recursive https://github.com/<your-user>/4m-peft.git
-cd 4m-peft
+conda activate 4m-peft
+export HF_HOME=/scratch-shared/tesr125338/hf_cache
 ```
 
-### 2. Install
+### Training (Snellius)
 ```bash
-pip install torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121
-pip install -e ml-4m/
+sbatch scripts/snellius/39_ft_caption_coco_r8_attention_v2.sh   # caption (v2, pad fix)
+sbatch scripts/snellius/36_ft_det_coco_r8_attention.sh           # detection (v2)
+sbatch scripts/snellius/25_ft_semseg_coco_r8_attention.sh        # semseg
+sbatch scripts/snellius/37_ft_depth_nyu_r8_attention.sh          # depth
+sbatch scripts/snellius/38_ft_normal_nyu_r8_attention.sh         # normal
+sbatch scripts/snellius/40_ft_5task_r8_attention_v2.sh           # multitask (v2)
 ```
 
-### 3. Dry-run (validates LoRA, no data needed)
+### Evaluation
 ```bash
-python run_finetuning_lora.py --dry_run --pretrained_model EPFL-VILAB/4M-21_B
+sbatch --export=ALL,RUN_NAME=caption_v2,LORA=/path/to/lora_weights-best.pth \
+    scripts/snellius/35_eval_all.sh
+
+python make_table.py \
+    --results output/eval_all/baseline/row.json \
+               output/eval_all/caption_v2/row.json \
+    --output results/table.md
 ```
 
-Expected output:
-```
-Total params:     837.2 M
-Trainable (LoRA): 2.802 M (0.335%)
-Forward pass OK. Loss = x.xxxx
-Backward pass OK.
-OK — gradients flow only through LoRA parameters.
-Peak GPU memory allocated: 4204 MiB
-```
+## Chameleon experiments
 
-> **Note on model sizes:** The full 4M-21 models include encoder + decoder + tokenizer/detokenizer
-> heads for all 21 modalities, so they are larger than the transformer backbone alone:
-> `4M-21_B` = 837 M params, `4M-21_XL` = 4533 M params (4.5 B).
-> LoRA injects ~0.33% trainable parameters in both cases.
+See [`chameleon/README.md`](chameleon/README.md) for setup and instructions.
 
-### 4. Fine-tune (with config file)
-```bash
-# Single GPU
-python run_finetuning_lora.py --config cfgs/finetune/semseg/nyu_rgb_r8.yaml
+## Acknowledgements
 
-# Multi-GPU (4 GPUs)
-OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 run_finetuning_lora.py \
-    --config cfgs/finetune/semseg/nyu_rgb_r8.yaml
-```
-
-## Data Preparation
-
-NYUv2 and ADE20K need to be pre-tokenized before training. See `scripts/snellius/01_tokenize_nyu.sh`.
-
-Expected layout after tokenization:
-```
-nyu_tokens/
-├── train/
-│   ├── tok_rgb/    (*.npy, shape (196,))
-│   └── tok_depth/  (*.npy, shape (196,))
-└── val/
-    ├── tok_rgb/
-    └── tok_depth/
-```
-
-## Snellius (HPC)
-
-```bash
-# Setup (once)
-bash scripts/snellius/00_setup_env.sh
-
-# Validate LoRA injection
-sbatch scripts/snellius/02_dry_run.sh
-
-# Fine-tune
-sbatch scripts/snellius/03_ft_semseg_nyu.sh
-```
-
-## Research Roadmap
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| L1 | Reproduce 4M-21 LoRA baselines (NYUv2 semseg + depth) | 🔄 In progress |
-| L2 | Modality-Aware LoRA (separate A,B per modality type) | 📋 Planned |
-| L3 | Multi-Task LoRA (joint semseg + depth fine-tuning) | 📋 Planned |
-| L4 | Multi-Modal Input LoRA (RGB+depth → semseg) | 📋 Planned |
-
-## Citation
-
-If you use this work, please also cite the original 4M-21 paper:
-```
-@article{4m21,
-  title={4M-21: An Any-to-Any Vision Model for Tens of Tasks and Modalities},
-  author={Bachmann, Roman and others},
-  year={2024}
-}
-```
+Built on [ml-4m](https://github.com/apple/ml-4m) (EPFL / Apple) and
+[Chameleon](https://huggingface.co/facebook/chameleon-7b) (Meta).

@@ -52,3 +52,4 @@ wandb/
 
 # Slurm output (keep locally, not in repo)
 slurm-*.out
+.ipynb_checkpoints/

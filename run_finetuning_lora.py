@@ -358,6 +358,11 @@ def build_mod_dict(input_tokens: torch.Tensor,
     # Mask out padding (id=0) positions so the loss is computed only on real tokens.
     if mask_padding:
         target_mask = (target_tokens == 0)   # True where pad → not predicted
+        # Safety: if ALL tokens in a sample are padding (e.g. image with no detections),
+        # target_mask would be all-True → loss=0 with no grad_fn → backward crash.
+        # In that case fall back to predicting all tokens (including padding) for that sample.
+        all_masked = target_mask.all(dim=-1, keepdim=True)  # (B, 1) bool
+        target_mask = target_mask & ~all_masked              # unmask fully-masked samples
     else:
         target_mask = torch.zeros((B, num_target_tokens), dtype=torch.bool, device=device)
 

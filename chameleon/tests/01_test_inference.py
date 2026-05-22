@@ -137,8 +137,8 @@ def test_image_captioning(model, processor):
             print(f'  Could not load test image ({e}) — skipping image test')
             return
 
-    # Chameleon requires <image> token in the prompt to place visual tokens
-    prompt = '<image>Describe this image in one sentence:'
+    # Chameleon: <image> token goes AFTER the text question
+    prompt = 'Describe this image in one sentence:<image>'
     inputs = processor(
         text=prompt,
         images=image,

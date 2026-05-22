@@ -144,6 +144,10 @@ def test_image_captioning(model, processor):
         return_tensors='pt',
     ).to(model.device)
 
+    # Cast pixel_values to model dtype (bfloat16) to avoid dtype mismatch
+    if 'pixel_values' in inputs:
+        inputs['pixel_values'] = inputs['pixel_values'].to(next(model.parameters()).dtype)
+
     with torch.no_grad():
         output = model.generate(
             **inputs,

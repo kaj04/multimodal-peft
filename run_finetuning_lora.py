@@ -530,6 +530,14 @@ def train_one_epoch(
             print(f'Loss is {loss_value}, stopping training.')
             sys.exit(1)
 
+        # Guard: 4M returns torch.zeros(1) (no grad_fn) when a batch has no predictable
+        # tokens (e.g., all-padding det/caption samples). Backward would crash.
+        # Skip this batch's gradient contribution — it carries no learning signal anyway.
+        if not loss.requires_grad:
+            if (step + 1) % args.accum_iter == 0:
+                optimizer.zero_grad()
+            continue
+
         # Gradient accumulation (use total loss for backward — correct signal)
         loss = loss / args.accum_iter
         grad_norm = loss_scaler(
@@ -660,6 +668,14 @@ def train_one_epoch_multitask(
         if not math.isfinite(loss_value):
             print(f'Loss is {loss_value}, stopping training.')
             sys.exit(1)
+
+        # Guard: 4M returns torch.zeros(1) (no grad_fn) when a batch has no predictable
+        # tokens (e.g., all-padding det/caption samples). Backward would crash.
+        # Skip this batch's gradient contribution — it carries no learning signal anyway.
+        if not loss.requires_grad:
+            if (step + 1) % args.accum_iter == 0:
+                optimizer.zero_grad()
+            continue
 
         loss = loss / args.accum_iter
         grad_norm = loss_scaler(

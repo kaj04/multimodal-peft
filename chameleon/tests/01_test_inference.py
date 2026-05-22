@@ -137,28 +137,38 @@ def test_image_captioning(model, processor):
             print(f'  Could not load test image ({e}) — skipping image test')
             return
 
-    # Chameleon: <image> token goes AFTER the text question
-    prompt = 'Describe this image in one sentence:<image>'
-    inputs = processor(
-        text=prompt,
-        images=image,
-        return_tensors='pt',
-    ).to(model.device)
+    # Multiple prompts to probe different visual understanding capabilities
+    prompts = [
+        'Describe this image in one sentence:<image>',
+        'How many people are in this image?<image>',
+        'What are the dominant colors in this image?<image>',
+    ]
 
-    # Cast pixel_values to model dtype (bfloat16) to avoid dtype mismatch
-    if 'pixel_values' in inputs:
-        inputs['pixel_values'] = inputs['pixel_values'].to(next(model.parameters()).dtype)
+    for prompt in prompts:
+        inputs = processor(
+            text=prompt,
+            images=image,
+            return_tensors='pt',
+        ).to(model.device)
 
-    with torch.no_grad():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=64,
-            do_sample=False,
-        )
+        # Cast pixel_values to model dtype (bfloat16) to avoid dtype mismatch
+        if 'pixel_values' in inputs:
+            inputs['pixel_values'] = inputs['pixel_values'].to(next(model.parameters()).dtype)
 
-    generated = processor.decode(output[0], skip_special_tokens=True)
-    print(f'  Prompt   : {prompt}')
-    print(f'  Generated: {generated}')
+        with torch.no_grad():
+            output = model.generate(
+                **inputs,
+                max_new_tokens=64,
+                do_sample=False,
+            )
+
+        generated = processor.decode(output[0], skip_special_tokens=True)
+        # Strip the prompt from the output
+        answer = generated[len(prompt.replace('<image>', '')):]
+        print(f'  Q: {prompt.replace("<image>", "")}')
+        print(f'  A: {answer.strip()}')
+        print()
+
     print('  ✓ Image captioning OK')
 
 

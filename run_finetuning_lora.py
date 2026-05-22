@@ -754,20 +754,26 @@ def evaluate(
                 return_logits=True,
             )
 
-        logits = mod_logits[args.target_mod]              # (B, 196, vocab_size)
+        logits = mod_logits[args.target_mod]              # (B, T, vocab_size)
         B, T, V = logits.shape
 
-        # Cross-entropy loss (matches the training objective exactly)
-        loss = F.cross_entropy(
-            logits.reshape(-1, V).float(),                # (B*196, vocab_size)
-            target_tokens.reshape(-1).long(),             # (B*196,)
-            reduction='mean',
-        )
+        # Cross-entropy loss — match training objective exactly:
+        # exclude padding (id=0) positions, same as mask_padding=True in build_mod_dict.
+        logits_flat  = logits.reshape(-1, V).float()      # (B*T, vocab_size)
+        targets_flat = target_tokens.reshape(-1).long()   # (B*T,)
+        valid        = targets_flat != 0                  # True on non-padding positions
+        if valid.any():
+            loss = F.cross_entropy(logits_flat[valid], targets_flat[valid], reduction='mean')
+        else:
+            loss = torch.zeros(1, device=logits.device).squeeze()
 
-        # Top-1 token accuracy:
-        # "what % of the 196 depth token positions did the model get exactly right?"
-        preds = logits.argmax(dim=-1)                     # (B, 196)
-        token_acc = (preds == target_tokens).float().mean()
+        # Top-1 token accuracy on non-padding positions only
+        preds      = logits.argmax(dim=-1)                # (B, T)
+        preds_flat = preds.reshape(-1)
+        if valid.any():
+            token_acc = (preds_flat[valid] == targets_flat[valid]).float().mean()
+        else:
+            token_acc = torch.zeros(1, device=logits.device).squeeze()
 
         metric_logger.update(loss=loss.item())
         metric_logger.update(token_acc=token_acc.item())
@@ -813,13 +819,16 @@ def evaluate_multitask(model, task_loaders, task_cfgs, device, epoch=0):
 
             logits = mod_logits[target_mod]
             B, T, V = logits.shape
-            loss = F.cross_entropy(
-                logits.reshape(-1, V).float(),
-                target_tokens.reshape(-1).long(),
-                reduction='mean',
-            )
-            preds      = logits.argmax(dim=-1)
-            token_acc  = (preds == target_tokens).float().mean()
+            logits_flat  = logits.reshape(-1, V).float()
+            targets_flat = target_tokens.reshape(-1).long()
+            valid        = targets_flat != 0
+            if valid.any():
+                loss = F.cross_entropy(logits_flat[valid], targets_flat[valid], reduction='mean')
+            else:
+                loss = torch.zeros(1, device=logits.device).squeeze()
+            preds      = logits.argmax(dim=-1).reshape(-1)
+            token_acc  = (preds[valid] == targets_flat[valid]).float().mean() if valid.any() \
+                         else torch.zeros(1, device=logits.device).squeeze()
 
             metric_logger.update(loss=loss.item())
             metric_logger.update(token_acc=token_acc.item())

@@ -110,26 +110,32 @@ def test_text_only(model, processor):
 
 
 def test_image_captioning(model, processor):
-    """Image captioning — requires a test image."""
+    """Image captioning — tries local COCO image first, then downloads from web."""
     print('\n' + '=' * 60)
     print('  Test 2: image + text (captioning)')
     print('=' * 60)
 
-    # Try to use a local test image; fall back to downloading a small one
     from PIL import Image
     import requests
     import io
+    from pathlib import Path
 
-    # Maradona at Napoli — public domain, Wikimedia Commons
-    img_url = 'https://commons.wikimedia.org/wiki/Special:FilePath/Diego_Maradona_Napoli.JPG'
-    try:
-        response = requests.get(img_url, timeout=10, allow_redirects=True,
-                               headers={'User-Agent': 'Mozilla/5.0'})
-        image = Image.open(io.BytesIO(response.content)).convert('RGB')
-        print(f'  Test image: {image.size} pixels (downloaded)')
-    except Exception as e:
-        print(f'  Could not download test image ({e}) — skipping image test')
-        return
+    # Try local COCO val2017 image first (already on Snellius scratch)
+    local_img = Path('/scratch-shared/tesr125338/coco/val2017/000000000139.jpg')
+    if local_img.exists():
+        image = Image.open(local_img).convert('RGB')
+        print(f'  Test image: {image.size} pixels (local COCO: {local_img.name})')
+    else:
+        # Fallback: Maradona at Napoli — public domain, Wikimedia Commons
+        img_url = 'https://commons.wikimedia.org/wiki/Special:FilePath/Diego_Maradona_Napoli.JPG'
+        try:
+            response = requests.get(img_url, timeout=10, allow_redirects=True,
+                                   headers={'User-Agent': 'Mozilla/5.0'})
+            image = Image.open(io.BytesIO(response.content)).convert('RGB')
+            print(f'  Test image: {image.size} pixels (downloaded)')
+        except Exception as e:
+            print(f'  Could not load test image ({e}) — skipping image test')
+            return
 
     prompt = 'Describe this image in one sentence:'
     inputs = processor(

@@ -21,6 +21,13 @@ import sys
 import torch
 from pathlib import Path
 
+# Anole lives in its own repo (~/anole) with a custom transformers fork.
+# We add it to sys.path so our scripts can import from it regardless of
+# where this file is located.
+ANOLE_REPO = os.environ.get('ANOLE_REPO', os.path.expanduser('~/anole'))
+if ANOLE_REPO not in sys.path:
+    sys.path.insert(0, ANOLE_REPO)
+
 CKPT_PATH  = os.environ.get('CKPT_PATH', '/scratch-shared/tesr125338/anole_ckpt')
 OUTPUT_DIR = Path('/scratch-shared/tesr125338/anole_outputs/tests')
 COCO_IMG   = Path('/scratch-shared/tesr125338/coco/val2017/000000000139.jpg')
@@ -100,9 +107,10 @@ def check_env():
 
     try:
         from constants import MODEL_7B_PATH  # noqa
-        print('  ✓ Anole constants importable (running from ~/anole/)')
+        print(f'  ✓ Anole modules importable (ANOLE_REPO={ANOLE_REPO})')
     except ImportError:
-        print('  ERROR: run this script from ~/anole/  (cd ~/anole)')
+        print(f'  ERROR: cannot import Anole constants from {ANOLE_REPO}')
+        print('  Check that ~/anole exists and ANOLE_REPO is set correctly.')
         sys.exit(1)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

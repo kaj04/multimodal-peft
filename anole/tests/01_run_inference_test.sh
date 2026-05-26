@@ -20,9 +20,7 @@ eval "$(conda shell.bash hook)"
 conda activate anole
 
 export CKPT_PATH=/scratch-shared/tesr125338/anole_ckpt
-
-# Must run from ~/anole so that Anole's modules are importable
-cd ~/anole
+export ANOLE_REPO=~/anole
 
 python ~/4m-peft/anole/tests/01_test_inference.py
 

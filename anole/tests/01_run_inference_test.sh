@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu_a100
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
-#SBATCH --time=00:30:00
+#SBATCH --time=01:00:00
 #SBATCH --output=/scratch-shared/tesr125338/anole_outputs/tests/slurm_%j.out
 #SBATCH --error=/scratch-shared/tesr125338/anole_outputs/tests/slurm_%j.err
 

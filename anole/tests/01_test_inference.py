@@ -6,13 +6,13 @@ Tests all 4 capabilities of Anole-7b-v0.1, saving every output to disk:
   1. Text generation          → text_generation.txt
   2. Image captioning / VQA   → image_understanding.txt
   3. Text-to-image            → text2image/*.png
-  4. Interleaved generation   → interleaved/*.txt + interleaved/*.png
+  4. Interleaved generation   → interleaved/*/ (output.txt + *.png)
 
-Usage (on Snellius GPU node, from ~/anole/):
+Usage (on Snellius GPU node):
     module load 2023 && module load Anaconda3/2023.07-2
     eval "$(conda shell.bash hook)" && conda activate anole
     export CKPT_PATH=/scratch-shared/tesr125338/anole_ckpt
-    cd ~/anole
+    export ANOLE_REPO=~/anole
     python ~/4m-peft/anole/tests/01_test_inference.py
 """
 
@@ -21,9 +21,7 @@ import sys
 import torch
 from pathlib import Path
 
-# Anole lives in its own repo (~/anole) with a custom transformers fork.
-# We add it to sys.path so our scripts can import from it regardless of
-# where this file is located.
+# Add Anole repo to sys.path so its modules are importable from anywhere.
 ANOLE_REPO = os.environ.get('ANOLE_REPO', os.path.expanduser('~/anole'))
 if ANOLE_REPO not in sys.path:
     sys.path.insert(0, ANOLE_REPO)
@@ -34,21 +32,25 @@ COCO_IMG   = Path('/scratch-shared/tesr125338/coco/val2017/000000000139.jpg')
 
 SEP = '=' * 60
 
+# Image boundary token IDs in Chameleon/Anole vocabulary
+BOI_TOKEN = 8197  # begin-of-image
+EOI_TOKEN = 8196  # end-of-image
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def split_token_sequence(tokens, boi=8197, eoi=8196):
-    """Split a flat token sequence into alternating text/image segments."""
+def split_token_sequence(tokens):
+    """Split a flat 1-D token tensor into alternating text/image segments."""
     segments = []
     current, mode = [], 'text'
     for tok in tokens.tolist():
-        if tok == boi:
+        if tok == BOI_TOKEN:
             if current:
                 segments.append({'type': 'text', 'tokens': torch.tensor(current)})
             current, mode = [], 'image'
-        elif tok == eoi:
+        elif tok == EOI_TOKEN:
             if current:
                 segments.append({'type': 'image', 'tokens': torch.tensor(current)})
             current, mode = [], 'text'
@@ -86,6 +88,7 @@ def check_env():
         print(f'  GPU       : {torch.cuda.get_device_name(0)}')
         print(f'  VRAM      : {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB')
     print(f'  CKPT_PATH : {CKPT_PATH}')
+    print(f'  ANOLE_REPO: {ANOLE_REPO}')
     print(f'  Output    : {OUTPUT_DIR}')
 
     required = [
@@ -97,20 +100,20 @@ def check_env():
     ok = True
     for p in required:
         mark = '✓' if p.exists() else '✗ MISSING'
-        print(f'  {mark}  {p.relative_to(CKPT_PATH)}')
+        rel  = str(p).replace(str(CKPT_PATH), '$CKPT_PATH')
+        print(f'  {mark}  {rel}')
         if not p.exists():
             ok = False
     if not ok:
-        print('\n  ERROR: checkpoint incomplete. Re-download with:')
+        print(f'\n  ERROR: checkpoint incomplete. Re-run:')
         print(f'    huggingface-cli download GAIR/Anole-7b-v0.1 --local-dir {CKPT_PATH}')
         sys.exit(1)
 
     try:
         from constants import MODEL_7B_PATH  # noqa
-        print(f'  ✓ Anole modules importable (ANOLE_REPO={ANOLE_REPO})')
+        print(f'  ✓ Anole constants importable')
     except ImportError:
-        print(f'  ERROR: cannot import Anole constants from {ANOLE_REPO}')
-        print('  Check that ~/anole exists and ANOLE_REPO is set correctly.')
+        print(f'  ERROR: cannot import from {ANOLE_REPO} — check ANOLE_REPO env var')
         sys.exit(1)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -143,7 +146,7 @@ def load_model():
 # ---------------------------------------------------------------------------
 
 def test_text_generation(model):
-    from chameleon.inference.chameleon import ChameleonInferenceModel
+    from chameleon.inference.chameleon import Options
     print(SEP)
     print('  Test 1: text generation')
     print(SEP)
@@ -154,13 +157,17 @@ def test_text_generation(model):
         'To fine-tune a large language model efficiently, one common technique is',
     ]
 
+    options = Options(max_gen_len=60)
+
     lines = []
     for prompt in prompts:
         tokens = model.generate(
-            prompt_ui=[{'type': 'text', 'value': prompt}],
-            options=ChameleonInferenceModel.Options(max_seq_len=80),
+            prompt_text=prompt,
+            options=options,
         )
-        text = model.decode_text(tokens).strip()
+        # decode_text returns list[str], one per batch item
+        texts = model.decode_text(tokens)
+        text = texts[0].strip() if texts else ''
         print(f'  P: {prompt}')
         print(f'  A: {text}\n')
         lines.append(f'PROMPT: {prompt}\nOUTPUT: {text}\n')
@@ -174,7 +181,7 @@ def test_text_generation(model):
 # ---------------------------------------------------------------------------
 
 def test_image_understanding(model):
-    from chameleon.inference.chameleon import ChameleonInferenceModel
+    from chameleon.inference.chameleon import Options
     print(SEP)
     print('  Test 2: image understanding (captioning + VQA)')
     print(SEP)
@@ -190,16 +197,19 @@ def test_image_understanding(model):
         'What is the overall mood or atmosphere of this image?',
     ]
 
+    options = Options(max_gen_len=120)
     lines = [f'Image: {COCO_IMG}\n']
+
     for q in questions:
         tokens = model.generate(
             prompt_ui=[
-                {'type': 'text',  'value': q + ' '},
                 {'type': 'image', 'value': f'file:{COCO_IMG}'},
+                {'type': 'text',  'value': q},
             ],
-            options=ChameleonInferenceModel.Options(max_seq_len=150),
+            options=options,
         )
-        answer = model.decode_text(tokens).strip()
+        texts = model.decode_text(tokens)
+        answer = texts[0].strip() if texts else ''
         print(f'  Q: {q}')
         print(f'  A: {answer}\n')
         lines.append(f'Q: {q}\nA: {answer}\n')
@@ -213,7 +223,7 @@ def test_image_understanding(model):
 # ---------------------------------------------------------------------------
 
 def test_text_to_image(model):
-    from chameleon.inference.chameleon import ChameleonInferenceModel
+    from chameleon.inference.chameleon import Options
     print(SEP)
     print('  Test 3: text-to-image generation')
     print(SEP)
@@ -226,15 +236,19 @@ def test_text_to_image(model):
         'a close-up portrait of a cat with blue eyes',
     ]
 
+    # Disable text generation mode so the model generates image tokens
+    options = Options(max_gen_len=1200)
+    options.txt = False
+
     out_dir = OUTPUT_DIR / 'text2image'
     for i, prompt in enumerate(prompts):
         print(f'  [{i+1}/{len(prompts)}] {prompt}')
         tokens = model.generate(
-            prompt_ui=[{'type': 'text', 'value': prompt}],
-            options=ChameleonInferenceModel.Options(
-                max_seq_len=1200,
-                mode='image',
-            ),
+            prompt_ui=[
+                {'type': 'text',     'value': prompt},
+                {'type': 'sentinel', 'value': '<END-OF-TURN>'},
+            ],
+            options=options,
         )
         images = model.decode_image(tokens)
         if images:
@@ -251,16 +265,18 @@ def test_text_to_image(model):
 # ---------------------------------------------------------------------------
 
 def test_interleaved(model):
-    from chameleon.inference.chameleon import ChameleonInferenceModel
+    from chameleon.inference.chameleon import Options
     print(SEP)
     print('  Test 4: interleaved text + image generation')
     print(SEP)
 
     prompts = [
-        ('paris',    'Please introduce the city of Paris with pictures.'),
-        ('animals',  'Show me three different animals with a brief description of each.'),
-        ('food',     'Describe two Italian dishes and show what they look like.'),
+        ('paris',   'Please introduce the city of Paris with pictures.'),
+        ('animals', 'Show me three different animals with a brief description of each.'),
+        ('food',    'Describe two Italian dishes and show what they look like.'),
     ]
+
+    options = Options(max_gen_len=3000)
 
     for slug, prompt in prompts:
         print(f'  Prompt: {prompt}')
@@ -268,30 +284,33 @@ def test_interleaved(model):
         out_dir.mkdir(parents=True, exist_ok=True)
 
         tokens = model.generate(
-            prompt_ui=[{'type': 'text', 'value': prompt}],
-            options=ChameleonInferenceModel.Options(max_seq_len=3000),
+            prompt_text=prompt,
+            options=options,
         )
 
+        # tokens shape: (batch, seq_len) — take first item
         segments = split_token_sequence(tokens[0])
         text_log = [f'PROMPT: {prompt}\n']
         img_count = 0
 
         for seg in segments:
             if seg['type'] == 'text':
-                text = model.decode_text(seg['tokens']).strip()
+                texts = model.decode_text(seg['tokens'].unsqueeze(0))
+                text = texts[0].strip() if texts else ''
                 if text:
-                    print(f'  TEXT: {text[:80]}...' if len(text) > 80 else f'  TEXT: {text}')
+                    preview = text[:100] + '...' if len(text) > 100 else text
+                    print(f'  TEXT: {preview}')
                     text_log.append(f'[TEXT]\n{text}\n')
             else:
                 img_count += 1
-                images = model.decode_image(seg['tokens'])
+                images = model.decode_image(seg['tokens'].unsqueeze(0))
                 if images:
                     fname = f'image_{img_count:02d}.png'
                     save_image(out_dir / fname, images[0])
                     text_log.append(f'[IMAGE] → {fname}\n')
 
         save_text(out_dir / 'output.txt', '\n'.join(text_log))
-        print(f'  Generated: {img_count} images\n')
+        print(f'  Generated: {img_count} image(s)\n')
 
     print('  ✓ Interleaved generation OK\n')
 

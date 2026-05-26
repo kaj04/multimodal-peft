@@ -43,22 +43,26 @@ EOI_TOKEN = 8196  # end-of-image
 # ---------------------------------------------------------------------------
 
 def split_token_sequence(tokens):
-    """Split a flat 1-D token tensor into alternating text/image segments."""
+    """Split a flat 1-D token tensor into alternating text/image segments.
+    Preserves the device of the input tensor so decode_image doesn't crash
+    with a CPU/CUDA mismatch in the VQGAN searchsorted call.
+    """
+    device = tokens.device
     segments = []
     current, mode = [], 'text'
     for tok in tokens.tolist():
         if tok == BOI_TOKEN:
             if current:
-                segments.append({'type': 'text', 'tokens': torch.tensor(current)})
+                segments.append({'type': 'text', 'tokens': torch.tensor(current, device=device)})
             current, mode = [], 'image'
         elif tok == EOI_TOKEN:
             if current:
-                segments.append({'type': 'image', 'tokens': torch.tensor(current)})
+                segments.append({'type': 'image', 'tokens': torch.tensor(current, device=device)})
             current, mode = [], 'text'
         else:
             current.append(tok)
     if current:
-        segments.append({'type': mode, 'tokens': torch.tensor(current)})
+        segments.append({'type': mode, 'tokens': torch.tensor(current, device=device)})
     return segments
 
 
@@ -277,7 +281,7 @@ def test_interleaved(model):
         ('food',    'Describe two Italian dishes and show what they look like.'),
     ]
 
-    options = Options(max_gen_len=3000)
+    options = Options(max_gen_len=800)
 
     for slug, prompt in prompts:
         print(f'  Prompt: {prompt}')

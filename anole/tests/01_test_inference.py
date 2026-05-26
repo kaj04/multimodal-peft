@@ -27,7 +27,8 @@ if ANOLE_REPO not in sys.path:
     sys.path.insert(0, ANOLE_REPO)
 
 CKPT_PATH  = os.environ.get('CKPT_PATH', '/scratch-shared/tesr125338/anole_ckpt')
-OUTPUT_DIR = Path('/scratch-shared/tesr125338/anole_outputs/tests')
+OUTPUT_DIR = Path(os.environ.get('ANOLE_OUTPUT_DIR',
+                  os.path.expanduser('~/4m-peft/anole/tests/output')))
 COCO_IMG   = Path('/scratch-shared/tesr125338/coco/val2017/000000000139.jpg')
 
 SEP = '=' * 60

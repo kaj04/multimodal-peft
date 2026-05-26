@@ -4,8 +4,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
 #SBATCH --time=01:00:00
-#SBATCH --output=/scratch-shared/tesr125338/anole_outputs/tests/slurm_%j.out
-#SBATCH --error=/scratch-shared/tesr125338/anole_outputs/tests/slurm_%j.err
+#SBATCH --output=/home/fcolasurdo/4m-peft/anole/tests/output/slurm_%j.out
+#SBATCH --error=/home/fcolasurdo/4m-peft/anole/tests/output/slurm_%j.err
+
+mkdir -p /home/fcolasurdo/4m-peft/anole/tests/output
 
 echo "================================================================"
 echo "  Anole-7b-v0.1 inference test"

@@ -150,12 +150,20 @@ def test_generation(model, processor):
         with torch.no_grad():
             outputs = model.generate(
                 **inputs, generation_mode="image",
+                # An image is 576 VQ tokens (24x24). Without this, generate uses
+                # the default max_length=20 -> truncated -> all-black image.
+                max_new_tokens=576,
                 do_sample=True, use_cache=True,
             )
             # Decode INSIDE no_grad so the tensor never requires grad (root fix).
             decoded = model.decode_image_tokens(outputs)
 
         decoded = decoded.detach().float().cpu()
+        # Diagnostics: if images are still off, these tell us whether the
+        # problem is generation (decoded near-constant) or conversion.
+        print(f"    decoded shape={tuple(decoded.shape)} "
+              f"min={float(decoded.min()):.3f} max={float(decoded.max()):.3f} "
+              f"mean={float(decoded.mean()):.3f}")
 
         # Try the processor's postprocess (proper denormalization). If this
         # transformers version chokes on it, fall back to a manual conversion

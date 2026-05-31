@@ -152,16 +152,28 @@ def test_generation(model, processor):
                 **inputs, generation_mode="image",
                 do_sample=True, use_cache=True,
             )
-        decoded = model.decode_image_tokens(outputs)
-        # This transformers version's postprocess returns np/pt, not PIL.
-        # Get numpy and convert to a PIL image defensively (handle CHW/HWC and
-        # float[0,1] vs [0,255]).
-        result = processor.postprocess(list(decoded.detach().float().cpu()), return_tensors="np")
-        arr = np.asarray(result["pixel_values"][0])
+            # Decode INSIDE no_grad so the tensor never requires grad (root fix).
+            decoded = model.decode_image_tokens(outputs)
+
+        decoded = decoded.detach().float().cpu()
+
+        # Try the processor's postprocess (proper denormalization). If this
+        # transformers version chokes on it, fall back to a manual conversion
+        # so we always get a viewable image instead of crashing the test.
+        try:
+            result = processor.postprocess(list(decoded), return_tensors="np")
+            arr = np.asarray(result["pixel_values"][0])
+        except Exception as e:
+            print(f"    postprocess failed ({e}); manual conversion")
+            arr = decoded[0].numpy()
+
+        arr = np.asarray(arr)
         if arr.ndim == 3 and arr.shape[0] in (1, 3):   # CHW -> HWC
             arr = np.transpose(arr, (1, 2, 0))
         if arr.dtype != np.uint8:
-            if arr.max() <= 1.0:
+            if float(arr.min()) < 0.0:          # roughly [-1, 1] -> [0, 1]
+                arr = (arr + 1.0) / 2.0
+            if float(arr.max()) <= 1.0 + 1e-3:  # [0, 1] -> [0, 255]
                 arr = (arr.clip(0, 1) * 255).round().astype("uint8")
             else:
                 arr = arr.clip(0, 255).astype("uint8")

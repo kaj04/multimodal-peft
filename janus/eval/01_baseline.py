@@ -30,7 +30,7 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from metrics import captioning_scores, CLIPScorer  # noqa: E402
+from metrics import captioning_scores, CLIPScorer, decoded_to_pil  # noqa: E402
 
 MODEL_ID    = "deepseek-community/Janus-Pro-1B"
 COCO_DIR    = Path("/scratch-shared/tesr125338/coco")
@@ -79,21 +79,7 @@ def generate_image(model, processor, prompt_text):
         outputs = model.generate(**inputs, generation_mode="image",
                                  max_new_tokens=576, do_sample=True, use_cache=True)
         decoded = model.decode_image_tokens(outputs)
-    decoded = decoded.detach().float().cpu()
-    try:
-        arr = np.asarray(processor.postprocess(list(decoded), return_tensors="np")["pixel_values"][0])
-    except Exception:
-        arr = decoded[0].numpy()
-    if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
-        arr = np.transpose(arr, (1, 2, 0))
-    if arr.dtype != np.uint8:
-        if float(arr.min()) < 0.0:
-            arr = (arr + 1.0) / 2.0
-        if float(arr.max()) <= 1.0 + 1e-3:
-            arr = (arr.clip(0, 1) * 255).round().astype("uint8")
-        else:
-            arr = arr.clip(0, 255).astype("uint8")
-    return Image.fromarray(arr)
+    return decoded_to_pil(decoded, processor)   # single source of truth
 
 
 # ---------------------------------------------------------------------------

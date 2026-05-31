@@ -23,6 +23,45 @@ import torch
 _PUNCT = re.compile(r"[^a-z0-9 ]")
 
 
+# ---------------------------------------------------------------------------
+# Generated-image decoding (single source of truth, used everywhere)
+# ---------------------------------------------------------------------------
+
+def decoded_to_pil(decoded, processor=None):
+    """Convert Janus `decode_image_tokens` output to a PIL image.
+
+    Handles: detach/cpu, optional processor.postprocess (np), CHW/HWC layout,
+    and value ranges [-1,1] / [0,1] / [0,255] in a SINGLE clean path. Keep all
+    image-saving code routed through here so the denormalization logic never
+    diverges (a duplicated, buggy version produced all-black images before).
+    """
+    import numpy as np
+    from PIL import Image
+
+    decoded = decoded.detach().float().cpu()
+    arr = None
+    if processor is not None:
+        try:
+            arr = np.asarray(
+                processor.postprocess(list(decoded), return_tensors="np")["pixel_values"][0])
+        except Exception:
+            arr = None
+    if arr is None:
+        arr = decoded[0].numpy()
+
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
+        arr = np.transpose(arr, (1, 2, 0))   # CHW -> HWC
+
+    amin, amax = float(arr.min()), float(arr.max())
+    if amin < -0.01:        # [-1, 1] -> [0, 1]
+        arr = (arr + 1.0) / 2.0
+    elif amax > 1.01:       # [0, 255] -> [0, 1]
+        arr = arr / 255.0
+    arr = (np.clip(arr, 0.0, 1.0) * 255.0).round().astype(np.uint8)
+    return Image.fromarray(arr)
+
+
 def simple_tokenize(s: str) -> str:
     s = s.lower().strip()
     s = _PUNCT.sub(" ", s)

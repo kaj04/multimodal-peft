@@ -175,16 +175,19 @@ def test_generation(model, processor):
             print(f"    postprocess failed ({e}); manual conversion")
             arr = decoded[0].numpy()
 
-        arr = np.asarray(arr)
-        if arr.ndim == 3 and arr.shape[0] in (1, 3):   # CHW -> HWC
+        arr = np.asarray(arr, dtype=np.float32)
+        # Ensure HWC layout (only transpose a genuine CHW array)
+        if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[2] not in (1, 3):
             arr = np.transpose(arr, (1, 2, 0))
-        if arr.dtype != np.uint8:
-            if float(arr.min()) < 0.0:          # roughly [-1, 1] -> [0, 1]
-                arr = (arr + 1.0) / 2.0
-            if float(arr.max()) <= 1.0 + 1e-3:  # [0, 1] -> [0, 255]
-                arr = (arr.clip(0, 1) * 255).round().astype("uint8")
-            else:
-                arr = arr.clip(0, 255).astype("uint8")
+        # Bring values into [0, 1] from whatever range the decoder produced,
+        # then a single clip+scale to uint8 (avoids the boundary bug where
+        # values slightly above 1.0 were mistaken for the [0,255] range).
+        amin, amax = float(arr.min()), float(arr.max())
+        if amin < -0.01:        # decoder output in [-1, 1]
+            arr = (arr + 1.0) / 2.0
+        elif amax > 1.01:       # already in [0, 255]
+            arr = arr / 255.0
+        arr = (np.clip(arr, 0.0, 1.0) * 255.0).round().astype(np.uint8)
         img = Image.fromarray(arr)
         fname = f"{i+1:02d}_{text[:30].replace(' ', '_')}.png"
         img.save(str(out_dir / fname))

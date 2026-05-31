@@ -156,7 +156,7 @@ def test_generation(model, processor):
         # This transformers version's postprocess returns np/pt, not PIL.
         # Get numpy and convert to a PIL image defensively (handle CHW/HWC and
         # float[0,1] vs [0,255]).
-        result = processor.postprocess(list(decoded.float()), return_tensors="np")
+        result = processor.postprocess(list(decoded.float().cpu()), return_tensors="np")
         arr = np.asarray(result["pixel_values"][0])
         if arr.ndim == 3 and arr.shape[0] in (1, 3):   # CHW -> HWC
             arr = np.transpose(arr, (1, 2, 0))

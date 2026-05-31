@@ -49,6 +49,9 @@ EVAL_N     = int(os.environ.get("EVAL_N", "200"))
 SEED       = int(os.environ.get("SEED", "42"))
 GEN_EVAL_N = int(os.environ.get("GEN_EVAL_N", "30"))   # images are slow
 N_SAVE     = 5
+# Which direction this adapter was trained on ("captioning" or "generation").
+# Determines the target task (expected to improve) vs the probe (forgetting).
+TRAINED_ON = os.environ.get("TRAINED_ON", "captioning")
 
 OUTPUT_DIR = Path(os.environ.get(
     "JANUS_OUTPUT_DIR",
@@ -124,14 +127,15 @@ def main():
 
     t0 = time.time()
     # BEFORE: adapter disabled -> base model behavior
+    samples_dir = OUTPUT_DIR / f"samples_{TRAINED_ON}"
     print("  evaluating BEFORE (adapter disabled)...", flush=True)
     with model.disable_adapter():
         before = run_eval(model, processor, eval_ids, id2file, refs, scorer,
-                          "before", OUTPUT_DIR / "samples")
+                          "before", samples_dir)
     # AFTER: adapter active
     print("  evaluating AFTER (adapter active)...", flush=True)
     after = run_eval(model, processor, eval_ids, id2file, refs, scorer,
-                     "after", OUTPUT_DIR / "samples")
+                     "after", samples_dir)
 
     deltas = {
         "CIDEr":     after["CIDEr"] - before["CIDEr"],
@@ -139,20 +143,26 @@ def main():
         "CLIPScore": after["CLIPScore"] - before["CLIPScore"],
     }
     results = {"model": MODEL_ID, "adapter": ADAPTER,
-               "trained_on": "captioning",
+               "trained_on": TRAINED_ON,
                "before": before, "after": after, "delta": deltas,
                "minutes": round((time.time() - t0) / 60, 1)}
 
+    # Label which metric is the trained target vs the cross-modal probe
+    cap_role = "target task, expect UP" if TRAINED_ON == "captioning" \
+        else "probe modality, DOWN = forgetting"
+    gen_role = "target task, expect UP" if TRAINED_ON == "generation" \
+        else "probe modality, DOWN = forgetting"
+
     print("\n" + SEP)
-    print("  FORGETTING SUMMARY  (trained on captioning)")
+    print(f"  FORGETTING SUMMARY  (trained on {TRAINED_ON})")
     print(SEP)
     print(f"  Captioning CIDEr : {before['CIDEr']:.4f} -> {after['CIDEr']:.4f}  "
-          f"(Δ {deltas['CIDEr']:+.4f})   [target task, expect UP]")
+          f"(Δ {deltas['CIDEr']:+.4f})   [{cap_role}]")
     print(f"  Generation CLIP  : {before['CLIPScore']:.2f} -> {after['CLIPScore']:.2f}  "
-          f"(Δ {deltas['CLIPScore']:+.2f})   [other modality, DOWN = forgetting]")
+          f"(Δ {deltas['CLIPScore']:+.2f})   [{gen_role}]")
     print(SEP)
 
-    out = OUTPUT_DIR / "forgetting_captioning.json"
+    out = OUTPUT_DIR / f"forgetting_{TRAINED_ON}.json"
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"  Results -> {out}")
     print(f"  Before/after samples -> {OUTPUT_DIR / 'samples'}")

@@ -130,7 +130,9 @@ def eval_captioning(model, processor, ids, id2file, refs):
 
 def eval_generation(model, processor, ids, id2file, refs):
     print(SEP); print(f"  Generation baseline (N={N_GEN}, CLIPScore)"); print(SEP)
+    print("  loading CLIP scorer (first run downloads ~600MB)...", flush=True)
     scorer = CLIPScorer()
+    print("  CLIP ready; generating images (this is silent per-image)...", flush=True)
     img_dir = OUTPUT_DIR / "gen_samples"
     img_dir.mkdir(parents=True, exist_ok=True)
     sample_ids = ids[:N_GEN]
@@ -146,8 +148,9 @@ def eval_generation(model, processor, ids, id2file, refs):
             (img_dir / f"{k:02d}_{img_id}_prompt.txt").write_text(prompt, encoding="utf-8")
             Image.open(VAL_IMAGES / id2file[img_id]).convert("RGB").save(
                 img_dir / f"{k:02d}_{img_id}_original.png")
-        if (k + 1) % 10 == 0:
-            print(f"    generated {k+1}/{len(sample_ids)}  (running mean CLIPScore={np.mean(vals):.2f})")
+        if (k + 1) % 5 == 0:
+            print(f"    generated {k+1}/{len(sample_ids)}  "
+                  f"(running mean CLIPScore={np.mean(vals):.2f})", flush=True)
     return {"clipscore_mean": float(np.mean(vals)),
             "clipscore_std": float(np.std(vals)), "n": len(vals)}
 

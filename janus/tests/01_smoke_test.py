@@ -78,9 +78,15 @@ def test_understanding(model, processor):
         "How many people are in this image?",
     ]
 
+    # Save the tested images alongside the answers so they can be inspected
+    # in the Open OnDemand file browser (scratch is not visible there).
+    img_out = OUTPUT_DIR / "understanding_images"
+    img_out.mkdir(parents=True, exist_ok=True)
+
     lines = []
     for img_path in images:
         image = Image.open(img_path).convert("RGB")
+        image.save(img_out / img_path.name)
         lines.append(f"=== {img_path.name} ===")
         print(f"  Image: {img_path.name}")
         for q in questions:
@@ -101,11 +107,12 @@ def test_understanding(model, processor):
                     **inputs, max_new_tokens=64,
                     generation_mode="text", do_sample=False,
                 )
-            answer = processor.decode(out[0], skip_special_tokens=True)
-            # keep only the newly generated part after the prompt text
+            # Decode ONLY the newly generated tokens (strip the prompt/system text)
+            gen_tokens = out[0][inputs["input_ids"].shape[1]:]
+            answer = processor.decode(gen_tokens, skip_special_tokens=True).strip()
             print(f"    Q: {q}")
-            print(f"    A: {answer.strip()[-300:]}")
-            lines.append(f"Q: {q}\nA: {answer.strip()}\n")
+            print(f"    A: {answer}")
+            lines.append(f"Q: {q}\nA: {answer}\n")
         lines.append("")
         print()
 

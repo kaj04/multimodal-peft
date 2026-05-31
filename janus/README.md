@@ -42,8 +42,8 @@ source ~/multimodal-peft/janus/env.sh
 
 ## Roadmap (go slow, verify each link before the next)
 
-1. **Smoke test (1B)** — `tests/`: load model, run understanding + generation on
-   a few COCO images, inspect outputs by eye.
+1. ✅ **Smoke test (1B)** — `tests/01_smoke_test.py`: model loads, understanding
+   (captions accurate) and generation (real 384x384 images) both work.
 2. **PEFT dry-run (1B)** — `tests/`: inject LoRA, run ONE training step in both
    directions (caption + generation), confirm `forward → loss → backward` works.
    *(This is exactly where Anole was impossible — the decisive de-risk.)*

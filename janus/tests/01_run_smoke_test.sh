@@ -18,11 +18,9 @@ module load 2023
 module load Anaconda3/2023.07-2
 source activate janus
 
-# Shared HF cache on scratch (model must be pre-downloaded on login node)
+# Shared HF cache on scratch. Snellius GPU nodes have internet, so the model
+# downloads here automatically on first run (and is reused from cache after).
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
-# Compute nodes have no internet -> force offline so it loads from cache
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
 
 python ~/multimodal-peft/janus/tests/01_smoke_test.py
 

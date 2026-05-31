@@ -49,10 +49,14 @@ source ~/multimodal-peft/janus/env.sh
    text-only, generation-custom-loss); gradients reach LoRA params in every case.
    Finding: LoRA lands on the LM (192 tensors) + SigLIP understanding encoder
    (144); generation path uses only the 192 LM tensors. *(The de-risk Anole failed.)*
-3. **Dataset + experiment design** — decide fine-tuning target vs evaluation
-   probes (in-distribution vs out-of-distribution), metrics per capability.
-4. **Baseline** — `eval/`: measure the pretrained model on every probe before
-   any fine-tuning (honest metrics first — the 4M lesson).
+3. ✅ **Dataset + experiment design** — focus on CROSS-MODAL forgetting (the
+   understanding↔generation tension, unique to unified models). Dataset = COCO
+   val2017 split (train/eval disjoint); OOD domain forgetting kept as optional
+   later study. Metrics: CIDEr/BLEU (caption), CLIPScore (generation).
+4. ✅ **Baseline** — `eval/01_baseline.py`: metrics validated on pretrained 1B over
+   COCO val. Captioning CIDEr=0.30 / BLEU-4=0.14; generation CLIPScore=30.6.
+   (CIDEr deflated by the model's verbosity vs terse COCO refs — fine for relative
+   forgetting deltas.) Reusable scorers in `eval/metrics.py`.
 5. **Experiments** — `train/` + `eval/`:
    - Exp 1: cross-modal forgetting transfer matrix (understanding ↔ generation)
    - Exp 2: LoRA rank sweep (task gain vs forgetting vs trainable params)

@@ -20,6 +20,7 @@ import sys
 import traceback
 from pathlib import Path
 
+import numpy as np
 import torch
 from PIL import Image
 
@@ -145,11 +146,21 @@ def test_generation(model, processor):
                 do_sample=True, use_cache=True,
             )
         decoded = model.decode_image_tokens(outputs)
-        images = processor.postprocess(
-            list(decoded.float()), return_tensors="PIL.Image.Image",
-        )
+        # This transformers version's postprocess returns np/pt, not PIL.
+        # Get numpy and convert to a PIL image defensively (handle CHW/HWC and
+        # float[0,1] vs [0,255]).
+        result = processor.postprocess(list(decoded.float()), return_tensors="np")
+        arr = np.asarray(result["pixel_values"][0])
+        if arr.ndim == 3 and arr.shape[0] in (1, 3):   # CHW -> HWC
+            arr = np.transpose(arr, (1, 2, 0))
+        if arr.dtype != np.uint8:
+            if arr.max() <= 1.0:
+                arr = (arr.clip(0, 1) * 255).round().astype("uint8")
+            else:
+                arr = arr.clip(0, 255).astype("uint8")
+        img = Image.fromarray(arr)
         fname = f"{i+1:02d}_{text[:30].replace(' ', '_')}.png"
-        images["pixel_values"][0].save(str(out_dir / fname))
+        img.save(str(out_dir / fname))
         print(f"    Saved -> {out_dir / fname}")
 
     print("  Test 2 done\n")

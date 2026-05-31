@@ -103,6 +103,8 @@ def load_val_references():
 
 def eval_captioning(model, processor, ids, id2file, refs):
     print(SEP); print(f"  Captioning baseline (N={N_CAPTION})"); print(SEP)
+    cap_dir = OUTPUT_DIR / "caption_samples"
+    cap_dir.mkdir(parents=True, exist_ok=True)
     sample_ids = ids[:N_CAPTION]
     hyps, samples = {}, []
     for k, img_id in enumerate(sample_ids):
@@ -112,6 +114,13 @@ def eval_captioning(model, processor, ids, id2file, refs):
         if k < N_SAVE:
             samples.append({"image": id2file[img_id], "generated": cap,
                             "reference": refs[img_id][0]})
+            # Save the INPUT image next to the OUTPUT + reference captions
+            image.save(cap_dir / f"{k:02d}_{img_id}.png")
+            (cap_dir / f"{k:02d}_{img_id}.txt").write_text(
+                f"[INPUT image]      {id2file[img_id]}\n"
+                f"[OUTPUT generated] {cap}\n"
+                f"[reference GT]     {refs[img_id][0]}\n",
+                encoding="utf-8")
         if (k + 1) % 25 == 0:
             print(f"    captioned {k+1}/{len(sample_ids)}")
     scores = captioning_scores(refs, hyps)
@@ -132,8 +141,11 @@ def eval_generation(model, processor, ids, id2file, refs):
         cs = scorer.score(image, prompt)
         vals.append(cs)
         if k < N_SAVE:
-            image.save(img_dir / f"{k:02d}_{img_id}.png")
-            (img_dir / f"{k:02d}_{img_id}.txt").write_text(prompt, encoding="utf-8")
+            # OUTPUT generated image, INPUT prompt, and the ORIGINAL COCO image
+            image.save(img_dir / f"{k:02d}_{img_id}_generated.png")
+            (img_dir / f"{k:02d}_{img_id}_prompt.txt").write_text(prompt, encoding="utf-8")
+            Image.open(VAL_IMAGES / id2file[img_id]).convert("RGB").save(
+                img_dir / f"{k:02d}_{img_id}_original.png")
         if (k + 1) % 10 == 0:
             print(f"    generated {k+1}/{len(sample_ids)}  (running mean CLIPScore={np.mean(vals):.2f})")
     return {"clipscore_mean": float(np.mean(vals)),

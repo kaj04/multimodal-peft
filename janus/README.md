@@ -44,9 +44,11 @@ source ~/multimodal-peft/janus/env.sh
 
 1. ✅ **Smoke test (1B)** — `tests/01_smoke_test.py`: model loads, understanding
    (captions accurate) and generation (real 384x384 images) both work.
-2. **PEFT dry-run (1B)** — `tests/`: inject LoRA, run ONE training step in both
-   directions (caption + generation), confirm `forward → loss → backward` works.
-   *(This is exactly where Anole was impossible — the decisive de-risk.)*
+2. ✅ **PEFT dry-run (1B)** — `tests/02_peft_dryrun.py`: LoRA injected (4.3M params,
+   0.21%); one training step PASSES in all three directions (understanding,
+   text-only, generation-custom-loss); gradients reach LoRA params in every case.
+   Finding: LoRA lands on the LM (192 tensors) + SigLIP understanding encoder
+   (144); generation path uses only the 192 LM tensors. *(The de-risk Anole failed.)*
 3. **Dataset + experiment design** — decide fine-tuning target vs evaluation
    probes (in-distribution vs out-of-distribution), metrics per capability.
 4. **Baseline** — `eval/`: measure the pretrained model on every probe before

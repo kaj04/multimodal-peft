@@ -62,6 +62,41 @@ def decoded_to_pil(decoded, processor=None):
     return Image.fromarray(arr)
 
 
+# ---------------------------------------------------------------------------
+# Generation helpers (single source of truth for inference in eval)
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def generate_caption(model, processor, image, max_new_tokens=64):
+    """image -> one-sentence caption (understanding)."""
+    messages = [{"role": "user",
+                 "content": [{"type": "image"},
+                             {"type": "text", "text": "Describe this image in one sentence."}]}]
+    prompt = processor.apply_chat_template(
+        messages, add_generation_prompt=True, generation_mode="text")
+    inputs = processor(text=prompt, images=[image], generation_mode="text",
+                       return_tensors="pt").to(model.device, next(model.parameters()).dtype)
+    out = model.generate(**inputs, max_new_tokens=max_new_tokens,
+                        generation_mode="text", do_sample=False)
+    gen = out[0][inputs["input_ids"].shape[1]:]
+    return processor.decode(gen, skip_special_tokens=True).strip()
+
+
+@torch.no_grad()
+def generate_image(model, processor, prompt_text):
+    """text -> PIL image (generation)."""
+    messages = [{"role": "user", "content": [{"type": "text", "text": prompt_text}]}]
+    prompt = processor.apply_chat_template(
+        messages, add_generation_prompt=True, generation_mode="image")
+    inputs = processor(text=prompt, generation_mode="image",
+                       return_tensors="pt").to(model.device)
+    model.generation_config.num_return_sequences = 1
+    outputs = model.generate(**inputs, generation_mode="image",
+                             max_new_tokens=576, do_sample=True, use_cache=True)
+    decoded = model.decode_image_tokens(outputs)
+    return decoded_to_pil(decoded, processor)
+
+
 def simple_tokenize(s: str) -> str:
     s = s.lower().strip()
     s = _PUNCT.sub(" ", s)

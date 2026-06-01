@@ -69,10 +69,30 @@ def alpha_for(rank: int) -> int:
     return 2 * rank
 
 
+def rank_json_path(rank: int) -> Path:
+    return EVAL_OUT / f"forgetting_captioning_r{rank}.json"
+
+
 def already_done(rank: int) -> bool:
     """A rank counts as done if its forgetting JSON exists and is non-empty."""
-    f = EVAL_OUT / f"forgetting_captioning_r{rank}.json"
+    f = rank_json_path(rank)
     return f.exists() and f.stat().st_size > 0
+
+
+def row_from_json(rank: int) -> dict:
+    """Build a summary row by reading the per-rank forgetting JSON on disk."""
+    data = json.loads(rank_json_path(rank).read_text())
+    return {
+        "rank": rank, "status": "ok",
+        "alpha": alpha_for(rank),
+        "delta_CIDEr":     data["delta"]["CIDEr"],
+        "delta_BLEU_4":    data["delta"]["BLEU_4"],
+        "delta_CLIPScore": data["delta"]["CLIPScore"],
+        "before_CIDEr":  data["before"]["CIDEr"],
+        "after_CIDEr":   data["after"]["CIDEr"],
+        "before_CLIP":   data["before"]["CLIPScore"],
+        "after_CLIP":    data["after"]["CLIPScore"],
+    }
 
 
 def run_subprocess(label: str, env: dict, script: Path) -> int:
@@ -114,6 +134,9 @@ def main():
 
         if already_done(R):
             print(f"\n=== rank {R}: SKIP (forgetting_captioning_{rank_tag}.json already present) ===", flush=True)
+            # Still record this rank in the summary so a SKIP-only re-run
+            # rebuilds the aggregated JSON instead of overwriting it with [].
+            summary.append(row_from_json(R))
             continue
 
         print(f"\n=== rank {R} ===", flush=True)
@@ -156,22 +179,9 @@ def main():
             summary.append({"rank": R, "status": "eval_failed"})
             continue
 
-        # 3) Record success
-        json_path = EVAL_OUT / f"forgetting_captioning_{rank_tag}.json"
-        if json_path.exists() and json_path.stat().st_size > 0:
-            data = json.loads(json_path.read_text())
-            summary.append({
-                "rank": R,
-                "status": "ok",
-                "alpha": alpha_for(R),
-                "delta_CIDEr":     data["delta"]["CIDEr"],
-                "delta_BLEU_4":    data["delta"]["BLEU_4"],
-                "delta_CLIPScore": data["delta"]["CLIPScore"],
-                "before_CIDEr":  data["before"]["CIDEr"],
-                "after_CIDEr":   data["after"]["CIDEr"],
-                "before_CLIP":   data["before"]["CLIPScore"],
-                "after_CLIP":    data["after"]["CLIPScore"],
-            })
+        # 3) Record success (reads the per-rank JSON we just wrote)
+        if already_done(R):
+            summary.append(row_from_json(R))
         else:
             summary.append({"rank": R, "status": "json_missing"})
 

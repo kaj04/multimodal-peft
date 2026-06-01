@@ -9,122 +9,556 @@
 %% -------------------------------------------------------------------
 \section{Project Evolution: From Dense-Prediction 4M to Unified Generative Models}
 %% -------------------------------------------------------------------
-% INTENT (to write): one paragraph bridging Part I to Part II. The original
-% 4M-21 framing studied PEFT on dense-prediction modalities (depth, normals,
-% semseg) and forgetting across 21 image modalities. While exploring it we
-% concluded that the multimodality of interest for our research question is
-% text <-> image *understanding and generation* in a single shared model, an
-% axis 4M does not cover (no native text->image generation). This motivated a
-% move toward natively *unified* understanding+generation models. This part is
-% a logbook of that exploration: hypotheses, dead ends, and validated results.
+
+Part~I studied PEFT on 4M-21, a native multimodal model whose modalities are
+image-derived dense maps (depth, surface normals, semantic segmentation) plus
+captioning. Over the course of those experiments the research question itself
+sharpened: the interaction we want to characterise is text$\leftrightarrow$image
+\emph{understanding and generation} within a single shared transformer ---
+the axis along which open native multimodal models are currently most active,
+and the one in which the unified-model thesis (one backbone, many modalities)
+is genuinely tested. 4M-21 does not exercise this axis: it has no native
+text-to-image generation. Part~II is therefore a logbook of the pivot toward
+\emph{natively unified} understanding+generation models, of the candidates we
+considered, and of the pipeline we built and validated on the chosen base
+model. We report what worked, what did not, and the first preliminary results;
+findings from Part~I are preserved as the methodological foundation on which
+the new experiments rest.
 
 %% -------------------------------------------------------------------
 \section{Model Selection: A Design-Space Exploration}
 %% -------------------------------------------------------------------
-% INTENT: the selection criteria + why each candidate was kept or ruled out.
-% Ends with a summary table of the "walls". The ruled-out models are a
-% contribution (lessons learned), not wasted effort.
+
+After the 4M-21 phase we re-examined which base model best fits a research
+question centred on the understanding$\leftrightarrow$generation interaction.
+Below we state the selection criteria and the reasons each candidate was kept
+or set aside. The discarded models are themselves a useful finding: they map
+out which open native multimodal models are, in practice, amenable to
+gradient-based PEFT today.
 
 \subsection{Selection criteria}
-% INTENT: state what a model must satisfy to support our experiments:
-%  (i) natively unified understanding AND generation;
-%  (ii) a standard, trainable nn.Module (so PEFT/get_peft_model works);
-%  (iii) image generation actually enabled in the open release;
-%  (iv) not gated / freely usable; (v) tractable size for 4xA100.
+A base model suitable for our experiments must:
+\begin{enumerate}
+    \item be \emph{natively unified} --- perform both multimodal understanding
+          (image$\rightarrow$text) and generation (text$\rightarrow$image)
+          within a single shared transformer backbone;
+    \item expose its weights as a standard \texttt{nn.Module}, so that
+          gradient-based PEFT (e.g.\ \texttt{peft.get\_peft\_model}) applies
+          directly without re-implementing the model;
+    \item have image generation \emph{actually enabled} in the open release;
+    \item be openly available and not gated;
+    \item fit our compute budget ($4\times$A100) at a tractable size.
+\end{enumerate}
 
 \subsection{4M-21: exploratory phase and lessons}
-% INTENT: keep Part I results; summarise what 4M taught us and why we moved on:
-%  - it gave us the PEFT machinery (LoRA on attention) and the forgetting-
-%    measurement methodology (cross-task transfer);
-%  - findings/bugs that shaped our methodology (CE-vs-metric disconnect on
-%    depth; train/val loss masking bug; all-padding no-grad crash);
-%  - the decisive limitation: its modalities are image-derived dense maps,
-%    not text<->image generation -> wrong axis for our question.
+The 4M-21 phase (Part~I) established methodology we still rely on: LoRA
+injection on attention projections and a cross-task transfer protocol for
+measuring forgetting. It also surfaced lessons that shaped the present work ---
+a cross-entropy-vs-metric disconnect on depth (token-level CE decreasing
+without a matching gain in metric-space depth accuracy), a train/validation
+generalisation gap diagnosed via an overfit test, and two pipeline bugs (a
+no-gradient crash on all-padding batches and an inconsistent train/validation
+loss masking) whose fixes we carry forward. The decisive limitation, however,
+is conceptual rather than technical: 4M-21's modalities are image-derived dense
+maps (depth, surface normals, semantic segmentation), not natural-language
+$\leftrightarrow$ image generation. It therefore does not exercise the
+understanding$\leftrightarrow$generation tension that defines our question.
+% TODO (Francesco to provide numbers): overfit test (CE-->0 vs generalisation),
+% AbsRel/delta on depth, normals forgetting on DIODE. Quantitative 4M results
+% live in Part~I (Table~\ref{tab:results}); extra figures to be added here.
 
 \subsection{Chameleon: image generation disabled in the open release}
-% INTENT: early-fusion unified token model, the right family, BUT Meta disabled
-% image generation in the HF release -> cannot study the generation direction.
+Chameleon \citep{chameleon2024} is an early-fusion, fully-tokenised unified
+model --- the right family. However, image generation is disabled in the public
+Hugging Face release: the detokenisation path that turns generated image tokens
+back into pixels is not exposed, so the generation direction cannot be studied
+without modifying the model. Criterion~(iii) fails.
 
 \subsection{Anole: inference-only architecture blocks PEFT}
-% INTENT: Anole re-enables generation on Chameleon (selective unfreezing of the
-% image-token output logits), but its open implementation runs the model in a
-% spawned subprocess -> weights are not accessible as an nn.Module -> LoRA /
-% gradient-based PEFT is not possible without re-implementing the stack.
+Anole \citep{chern2024anole} re-enables generation on Chameleon by selectively
+unfreezing the image-token output logits --- conceptually close to a
+modality-aware PEFT. Its open implementation, however, executes the model inside
+a spawned worker subprocess for inference; the parameters are not reachable as a
+live \texttt{nn.Module} in the main process. Gradient-based PEFT is therefore
+not possible without re-implementing the serving stack. Criterion~(ii) fails.
 
 \subsection{Janus-Pro: the tractable choice}
-% INTENT: DeepSeek Janus-Pro satisfies every criterion: HF-native
-% JanusForConditionalGeneration (standard nn.Module), both understanding
-% (generation_mode="text") and generation (generation_mode="image"), decoupled
-% visual encoders (SigLIP for understanding, VQ-VAE for generation) over one
-% shared transformer, MIT/DeepSeek licence (not gated), 1B and 7B sizes.
+Janus-Pro \citep{wu2024janus} satisfies every criterion. It is integrated in
+Hugging Face \texttt{transformers} as \texttt{JanusForConditionalGeneration} (a
+standard \texttt{nn.Module}); it performs both understanding
+(\texttt{generation\_mode="text"}) and generation
+(\texttt{generation\_mode="image"}); it \emph{decouples} the visual encoders ---
+a SigLIP encoder for understanding and a VQ-VAE for generation --- over a single
+shared transformer; it is released under MIT/DeepSeek licences and is not gated;
+and it is available at 1B and 7B parameters. We prototype on the 1B model and
+reserve the 7B for final numbers. The decoupled encoders also make Janus the
+natural testbed for our LoRA-placement question (Section~\ref{sec:janus_rqs}).
 
-% TABLE (to write): rows = {Native HF nn.Module, weights trainable for PEFT,
-% image generation enabled, decoupled enc., open/not-gated}; columns =
-% {Chameleon, Anole, Janus-Pro}. Marks the walls vs Janus passing all.
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Requirement & Chameleon & Anole & Janus-Pro \\
+\midrule
+Native HF \texttt{nn.Module}        & Yes & No (subprocess) & Yes \\
+Weights trainable for PEFT          & Yes & No              & Yes \\
+Image generation enabled (open)     & No  & Yes             & Yes \\
+Decoupled understanding/gen.\ enc.  & No  & No              & Yes \\
+Open / not gated                    & Yes & Yes             & Yes \\
+\bottomrule
+\end{tabular}
+\caption{Why each open native multimodal model was kept or ruled out for
+gradient-based PEFT experiments. Janus-Pro is the only candidate that satisfies
+all criteria.}
+\label{tab:model_selection}
+\end{table}
 
 %% -------------------------------------------------------------------
 \section{Janus-Pro: Experimental Setup}
+\label{sec:janus_setup}
 %% -------------------------------------------------------------------
-% INTENT: model (Janus-Pro-1B for prototyping, 7B planned for final numbers);
-% data = a disjoint split of COCO val2017 (train2017 not currently available;
-% rationale for the split and that it is sufficient for relative forgetting);
-% LoRA config (r=8, alpha=16, attention q/k/v/o, ~4.3M trainable params, 0.21%);
-% metrics: CIDEr/BLEU (captioning), CLIPScore (generation), with FID/GenEval and
-% PTBTokenizer planned for benchmark-comparable final numbers.
+
+\paragraph{Model.} We use \texttt{deepseek-community/Janus-Pro-1B} for
+prototyping and reserve the 7B variant for the final, scaling-comparable
+numbers. Both share the decoupled-encoder architecture: a SigLIP visual encoder
+for understanding, a VQ-VAE (codebook size $16{,}384$, $576$ tokens per image)
+for generation, over a single shared Llama-style transformer backbone.
+
+\paragraph{Data.} We use COCO val2017 (5{,}000 images) as both training and
+evaluation pool. The 118k-image COCO train2017 set is not currently available
+on our scratch storage; rather than downloading it for this pilot we split
+val2017 into two \emph{disjoint} subsets with a fixed seed
+($\textsc{seed}=42$): $\text{TRAIN\_N}=4000$ images for fine-tuning and the
+remaining held-out subset for evaluation
+($\text{EVAL\_N}=200$ for captioning, $\text{GEN\_EVAL\_N}=30$ for generation,
+the latter capped by the autoregressive cost of $576$ tokens per image). For
+this study --- whose object is the \emph{relative} change of a probe under
+adaptation --- this is sufficient: the same held-out subset is used to measure
+the model before and after fine-tuning, so a possible mismatch in absolute
+numbers vs the official benchmark splits does not affect the deltas. We will
+move to the full train2017 split when scaling to the 7B model and to
+benchmark-comparable numbers.
+
+\paragraph{Captioning labels.} For an image $I$ with reference captions
+$\{c_1, \dots, c_k\}$, we use the first reference $c_1$ as the training target.
+Prompt and answer are masked separately and only the assistant-generated
+caption tokens contribute to the loss.
+
+\paragraph{Generation labels.} The target image is encoded to discrete
+codebook indices by the model's own VQ-VAE via
+\texttt{model.model.vqmodel.encode(pixel\_values).image\_tokens}; these indices
+become the labels. The corresponding text prompt is the same reference caption
+$c_1$. We train the generation head with teacher forcing (see
+Section~\ref{sec:dryrun}).
+
+\paragraph{LoRA configuration.}
+\begin{itemize}
+    \item rank $r=8$, scaling $\alpha=16$, dropout $0.05$;
+    \item target modules: attention projections \texttt{q\_proj}, \texttt{k\_proj},
+          \texttt{v\_proj}, \texttt{o\_proj};
+    \item task type: \texttt{CAUSAL\_LM}; bias disabled;
+    \item trainable parameters: $4.325$M out of $2{,}081$M total ($0.208\%$),
+          distributed over $336$ LoRA tensors.
+\end{itemize}
+
+\paragraph{Optimisation.} AdamW with learning rate $10^{-4}$, batch size $1$
+with gradient accumulation $8$ (effective batch size $8$), gradient clipping
+to norm $1.0$. We deliberately keep batch size $1$ for this pilot: it reuses
+the single-sample label masking validated by the dry-run (Section~\ref{sec:dryrun})
+and side-steps any padding-related bug in batched sequences, of the kind that
+caused a measurement failure in Part~I. True batching is an optimisation we
+add later, after correctness.
+
+\paragraph{Metrics.} For captioning we report CIDEr and BLEU-4 via
+\texttt{pycocoevalcap} with a simple lowercase/alphanumeric tokenizer
+(internally consistent for before/after deltas; PTBTokenizer will be added
+for benchmark-comparable final numbers). For generation we report CLIPScore:
+$100\cdot\cos(\phi_\text{img}, \phi_\text{txt})$ with
+\texttt{openai/clip-vit-base-patch32}. CLIPScore is a coarse alignment metric
+and may underestimate fidelity/quality loss; FID and GenEval (the two
+benchmarks reported by Janus-Pro itself) are planned for the final numbers.
+
+\paragraph{Compute.} Single A100 (40\,GB) on Snellius; \texttt{bfloat16}
+weights; HF cache shared on scratch. Training one epoch on 4{,}000 examples
+takes about $15$--$20$ minutes for captioning and longer for generation
+(autoregressive image decoding).
+
+\paragraph{Tracking and reproducibility.} Weights \& Biases project
+\texttt{janus-peft}: training loss, learning rate, gradient norm per step,
+and held-out metrics per epoch. Code, environments and SLURM scripts are
+version-controlled at \texttt{github.com/kaj04/multimodal-peft}.
 
 %% -------------------------------------------------------------------
 \section{Pipeline Validation}
+\label{sec:pipeline_validation}
 %% -------------------------------------------------------------------
-% INTENT: establish, step by step, that the machinery works before trusting any
-% result (the methodological lesson from the 4M measurement bug).
+
+A central lesson from Part~I is that any conclusion downstream of a broken
+metric is unreliable. Before any LoRA training is attempted we therefore
+validate the machinery in three escalating steps: (i) inference works in both
+directions, (ii) a single training step completes for every direction we want
+to study, with gradients actually reaching the LoRA parameters, and (iii) the
+evaluation metrics produce meaningful numbers on the untrained model. Only
+after all three pass do we trust any post-training delta.
 
 \subsection{Inference smoke test}
-% INTENT: Janus-Pro-1B loads and runs both directions: accurate captions and
-% coherent 384x384 generated images.
+\label{sec:smoke}
+
+The first check is operational: Janus-Pro-1B loads in the
+\texttt{JanusForConditionalGeneration} class, captions four held-out COCO
+images at a level we judge accurate by eye, and generates coherent
+$384\times384$ images from text prompts. While trivial-sounding, this step
+ruled out a Janus-Pro-specific failure mode we encountered along the way:
+the default \texttt{generate} configuration uses \texttt{max\_length}$=20$,
+which truncates the image-token sequence to far fewer than the $576$ tokens
+needed for a complete picture, producing all-black images. The fix
+(\texttt{max\_new\_tokens}$=576$) and the value-range handling of
+\texttt{decode\_image\_tokens} (output in $[-1,1]$, HWC layout) are recorded
+in Section~\ref{sec:eng_notes}.
 
 \subsection{PEFT dry-run across all training directions}
-% INTENT: LoRA injects and a single training step (forward->loss->backward)
-% succeeds in all three directions (understanding, text-only, generation via a
-% custom loss), with gradients reaching the LoRA params. Note the finding that
-% with q/k/v/o targets LoRA lands on the LM (192 tensors) + SigLIP understanding
-% encoder (144); the generation path engages only the 192 LM tensors -> a lever
-% for the LoRA-placement question.
+\label{sec:dryrun}
+
+The dry-run is the de-risking step that Anole could not pass: inject LoRA in
+the live \texttt{nn.Module}, run a single training step
+(forward$\rightarrow$loss$\rightarrow$backward$\rightarrow$\texttt{optimizer.step}),
+and verify that gradients reach the LoRA parameters. We test each direction
+in isolation, so one failure does not hide another:
+
+\begin{enumerate}
+    \item \textbf{Understanding} (image+text$\rightarrow$text): the native
+          \texttt{forward(\dots, labels)} path, with labels masked to
+          $-100$ before the assistant's answer and at image-token positions.
+    \item \textbf{Text-only} (text$\rightarrow$text): the same native path
+          without an image.
+    \item \textbf{Generation} (text$\rightarrow$image): \emph{not} supported
+          by the stock \texttt{forward}, which only computes text loss. We
+          implement the custom training step that mirrors the model's own
+          generation path:
+\end{enumerate}
+
+\noindent For generation, the loss for a single example is computed as
+
+\begin{enumerate}
+    \item encode the target image to discrete tokens
+          $z = \texttt{vqmodel.encode}(I)\in\{0,\dots,16{,}383\}^{576}$;
+    \item embed the text prompt $t$ with the input embedding table, and embed
+          the image tokens with
+          \texttt{prepare\_embeddings\_for\_image\_generation};
+    \item run the shared transformer on the concatenated, teacher-forced
+          sequence $[t \,|\, z_{:-1}]$;
+    \item project the hidden states corresponding to the image positions
+          through \texttt{generation\_head} to obtain logits over the codebook;
+    \item compute $\mathcal{L}_{\text{gen}} = \mathrm{CE}(\text{logits}, z)$.
+\end{enumerate}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccccl}
+\toprule
+Direction & loss & grad-norm (LoRA) & \#LoRA params w/ grad & status \\
+\midrule
+Understanding (img$+$txt$\rightarrow$txt)        & 9.40 & 4.71 & 336 / 336 & PASS \\
+Text-only (txt$\rightarrow$txt)                  & 3.04 & 0.58 & 192 / 336 & PASS \\
+Generation (txt$\rightarrow$img, custom loss)    & 7.98 & 0.38 & 192 / 336 & PASS \\
+\bottomrule
+\end{tabular}
+\caption{PEFT dry-run on Janus-Pro-1B (LoRA $r{=}8$ on
+\texttt{q/k/v/o\_proj}, batch size $1$, AdamW). All three training directions
+produce a finite loss with non-zero gradient norm at the LoRA parameters; the
+custom generation loss is therefore confirmed to be differentiable end-to-end.}
+\label{tab:dryrun}
+\end{table}
+
+\paragraph{Where LoRA actually lands.} With the chosen targets the $336$
+injected LoRA tensors split into $192$ inside the shared language-model
+backbone and $144$ inside the SigLIP understanding encoder. The generation
+path does not traverse SigLIP, so only the $192$ language-model tensors
+receive a gradient when training the generation direction (cf.\
+Table~\ref{tab:dryrun}). This structural fact is a lever for the
+LoRA-placement question (Section~\ref{sec:janus_rqs}, RQ2): the decoupled
+architecture lets us, in principle, restrict adaptation to the understanding
+pathway, the generation pathway, or the shared backbone, and observe where
+forgetting concentrates.
 
 \subsection{Baseline metric validation}
-% INTENT: metrics validated on the pretrained model over COCO val
-% (CIDEr ~0.30, BLEU-4 ~0.14, CLIPScore ~30.6). Honest caveat: CIDEr is deflated
-% by the model's verbosity vs terse COCO references -> fine for relative deltas.
+\label{sec:baseline}
+
+The final check is whether our evaluation metrics behave sensibly on the
+\emph{untrained} model. We caption $100$ held-out COCO images and generate
+$30$ images from real COCO captions, then score them with our pipeline.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Metric & Score & Notes \\
+\midrule
+CIDEr     & $0.296$        & \texttt{pycocoevalcap}, simple tokenizer \\
+BLEU-4    & $0.140$        & idem \\
+CLIPScore & $30.6 \pm 2.9$ & CLIP ViT-B/32, $n=30$ \\
+\bottomrule
+\end{tabular}
+\caption{Baseline evaluation of pretrained Janus-Pro-1B (no LoRA) on a held-out
+COCO subset. Numbers are sensible and serve as the reference point for all
+subsequent before/after deltas.}
+\label{tab:baseline}
+\end{table}
+
+The numbers are in the expected range for a 1B zero-shot model. Two honest
+caveats matter for interpretation later: (i) CIDEr is depressed because the
+pretrained model writes long, descriptive captions whereas COCO references
+are short --- low $n$-gram overlap by stylistic mismatch, not by lack of
+understanding; (ii) CLIPScore measures text$\leftrightarrow$image alignment,
+not generated-image fidelity or aesthetic quality, and may therefore miss a
+quality regression that is invisible to alignment. Both points are addressed
+in Section~\ref{sec:janus_rqs}.
 
 %% -------------------------------------------------------------------
 \section{Preliminary Results: Cross-Modal Forgetting under LoRA}
+\label{sec:prelim_forgetting}
 %% -------------------------------------------------------------------
-% INTENT: define the cross-modal transfer matrix (train on one direction,
-% measure both). Report the first pilot row (trained on captioning), measured
-% with the adapter disabled vs enabled on the SAME held-out split:
-%   captioning CIDEr 0.224 -> 1.243 (learned; largely COCO-style adaptation),
-%   generation CLIPScore 30.75 -> 31.18 (within noise -> no forgetting; mild
-%   positive transfer confirmed by eye on the generated images).
-% Honest caveats: single 1B run, no seeds yet; CIDEr gain is partly style
-% adaptation; CLIPScore is a coarse alignment metric (may miss quality loss).
-% TABLE (to write): 2x2 transfer matrix, fill the generation row when ready.
+
+\subsection{Design: a $2\times2$ cross-modal transfer matrix}
+
+The unified-model thesis is that one shared backbone supports both
+understanding and generation. The simplest experiment that puts that thesis
+under pressure with PEFT is: \emph{fine-tune the LoRA adapter on one direction
+and measure the probe on both}. We organise this as a $2\times2$ matrix whose
+rows index the direction we train on and whose columns index the direction we
+evaluate on (Table~\ref{tab:transfer_matrix}). The diagonal entries quantify
+task acquisition; the off-diagonal entries quantify cross-modal forgetting.
+For each cell we report the change of the same metric on the same held-out
+subset relative to the pretrained baseline (Table~\ref{tab:baseline}).
+
+\paragraph{Adapter-off vs adapter-on as a controlled comparison.}
+We deliberately measure both ``before'' and ``after'' on the same loaded
+model: PEFT's \texttt{disable\_adapter()} context manager turns the LoRA
+update off, leaving the base weights in place; outside that context, the
+update is active. The base weights, the input pipeline, the held-out subset
+and the sampling seeds are therefore identical between conditions, and the
+only variable is whether the rank-$r$ correction is added. This minimises
+nuisance variance and isolates the effect of the adapter.
+
+\subsection{First row: trained on captioning}
+\label{sec:row_captioning}
+
+We trained one epoch of captioning ($\textsc{train\_n}=4{,}000$,
+$\textsc{eval\_n}=200$, $\textsc{gen\_eval\_n}=30$) with the configuration
+of Section~\ref{sec:janus_setup}, saved the adapter, and evaluated both
+metrics on the same held-out split with the adapter disabled and enabled.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Metric & Adapter off & Adapter on & $\Delta$ \\
+\midrule
+Captioning CIDEr   & $0.224$ & $1.243$ & $\mathbf{+1.019}$ \\
+Captioning BLEU-4  & $0.127$ & $0.365$ & $+0.238$ \\
+Generation CLIPScore & $30.75$ & $31.18$ & $+0.44$ \\
+\bottomrule
+\end{tabular}
+\caption{First row of the cross-modal transfer matrix: LoRA $r{=}8$ trained
+on captioning, evaluated on captioning (target) and generation (cross-modal
+probe). Same held-out images and seeds with and without the adapter. The
+captioning gain is large; the generation CLIPScore moves within the baseline
+standard deviation ($\pm 2.9$), i.e.\ within noise.}
+\label{tab:row_captioning}
+\end{table}
+
+\paragraph{Reading the captioning gain honestly.} CIDEr moves from $0.224$ to
+$1.243$ ($5.5\times$), but inspection of the generated captions before and
+after shows that a large part of this gain is \emph{stylistic} adaptation
+rather than improved understanding. The pretrained model produces long,
+descriptive captions (``\emph{The image shows a modern kitchen with a large
+island featuring a sink, a faucet, and wooden cabinetry, with a view of a
+dining area in the background.}'') whereas COCO references are short
+(``\emph{A woman stands in the dining area.}''). After fine-tuning the model
+adopts the COCO style (``\emph{A kitchen with a sink and a table.}''), which
+greatly increases $n$-gram overlap with the references. The arguably more
+informative content was already there before fine-tuning. We will return to
+this point when designing the final evaluation (PTBTokenizer for comparability,
+human-style or VQA-style probes for content fidelity).
+
+\paragraph{Reading the generation result.} CLIPScore changes by $+0.44$,
+well within the baseline standard deviation of $\pm 2.9$ over $30$ images,
+so we treat the change as \emph{not significant}: the pilot shows
+\textbf{no measurable cross-modal forgetting from captioning to generation}
+under LoRA-on-attention. Eyeballing the before/after generated images for
+five fixed prompts supports this reading: image quality and prompt fidelity
+appear preserved, and the after-images are subjectively slightly more
+realistic. This is the qualitative direction predicted by the literature on
+LoRA as a less-forgetting alternative to full fine-tuning; the contrast with
+the strong forgetting reported by Anole under full fine-tuning is the most
+interesting comparison this matrix begins to draw.
+
+\subsection{Status of the matrix}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{l|cc}
+\toprule
+\diagbox[width=12em]{train on}{evaluate on} & Captioning (CIDEr) & Generation (CLIPScore) \\
+\midrule
+\textbf{Captioning} & $+1.019$ (target) & $+0.44$ (within noise) \\
+\textbf{Generation} & \emph{in progress} & \emph{in progress} (target) \\
+\bottomrule
+\end{tabular}
+\caption{Pilot transfer matrix on Janus-Pro-1B with LoRA $r{=}8$ on attention.
+First row populated; the generation row is the next experiment.}
+\label{tab:transfer_matrix}
+\end{table}
+
+% Note for typeset: \diagbox requires \usepackage{diagbox}; if not in Ivan's
+% preamble, replace the diagbox cell with a two-line header.
+
+\paragraph{Honest scope of these numbers.} This is a single pilot run at the
+1B scale with one seed and a small evaluation set ($n=30$ for generation in
+particular). It is a working signal, not a definitive result. The next steps
+(Section~\ref{sec:janus_rqs}) sharpen both the experiment (multiple seeds,
+larger probes, stronger generation metrics) and its scope (the second row of
+the matrix, then RQ2 and RQ3).
 
 %% -------------------------------------------------------------------
 \section{Updated Research Questions and Directions}
+\label{sec:janus_rqs}
 %% -------------------------------------------------------------------
-% INTENT: state the questions this logbook now pursues, and how they relate to
-% the threads in Ivan's sections (token-modality-conditioned LoRA; scaling laws)
-% which remain open future directions rather than the immediate focus:
-%   RQ1  cross-modal forgetting: does PEFT on one modality degrade the other?
-%   RQ2  LoRA placement: shared backbone vs decoupled understanding/generation
-%        pathways -> is forgetting localized? (unique to Janus' decoupled enc.)
-%   RQ3  rank sweep: task gain vs forgetting vs trainable parameters.
+
+The Part~I framing (Section~1) listed three RQs on dense-prediction
+modalities. The Janus pivot recasts them around the
+understanding$\leftrightarrow$generation axis and adds a question that only
+a decoupled-encoder architecture lets us ask. The three lines below are what
+the remaining experiments target. The broader threads in
+Section~\ref{sec:related_work} --- token-modality-conditioned LoRA and joint
+scaling laws $L_{\text{adapt}}(N, r, D_{\text{ft}}, M)$ for native
+multimodal models --- remain motivating future directions; this work
+is the empirical groundwork they would build on.
+
+\paragraph{RQ1. Cross-modal forgetting under PEFT.}
+\emph{Does LoRA fine-tuning on one direction (understanding or generation)
+degrade the other?} Operationalised as the $2\times2$ transfer matrix of
+Section~\ref{sec:prelim_forgetting}, with the first row already populated
+and the second row in progress. The pilot suggests LoRA on attention behaves
+as an ``insulator'' in the captioning$\rightarrow$generation direction --- a
+claim we tighten with multiple seeds and stronger metrics.
+
+\paragraph{RQ2. Localisation of forgetting along Janus' decoupled pathways.}
+\emph{Is forgetting concentrated in the shared backbone, in the understanding
+encoder (SigLIP), or in the generation pathway (VQ-VAE side)?} Section~\ref{sec:dryrun}
+already showed that with \texttt{q/k/v/o} targets LoRA naturally lands on
+both the language model ($192$ tensors) and SigLIP ($144$); the generation
+forward only engages the LM half. This gives three placement regimes to
+compare: LoRA restricted to the LM only, to SigLIP only, or to both
+(default). RQ2 measures how each placement trades off task acquisition
+against forgetting on the other direction. This is the question that the
+Janus architecture uniquely makes accessible among current open native
+multimodal models.
+
+\paragraph{RQ3. Rank vs efficiency vs forgetting.}
+\emph{How does LoRA rank shape the trade-off?} A sweep
+$r\in\{4, 8, 16, 32, 64\}$ on the captioning direction with the same probe
+suite gives a curve in (trainable parameters, target metric, cross-modal
+forgetting). The shape of the curve is itself the result: a saturating gain
+with growing forgetting would corroborate the ``LoRA past a small rank gives
+diminishing returns'' regime reported by \citet{zhang2024scalingmeetsfinetuning};
+a non-monotone forgetting curve would isolate a sweet spot.
+
+\paragraph{Methodological strengthening planned for all three RQs.}
+\begin{itemize}
+    \item Multiple seeds ($\geq 3$) per cell, with error bars on every delta.
+    \item A larger generation probe set than the current $n=30$.
+    \item FID and GenEval to complement CLIPScore on the generation side
+          (these are the benchmarks reported by Janus-Pro itself, so the
+          numbers become directly comparable).
+    \item PTBTokenizer for CIDEr/BLEU to be comparable with standard COCO
+          captioning leaderboards.
+    \item A text-perplexity probe (e.g.\ short held-out captions or
+          \texttt{WikiText}) as a third forgetting axis, since both
+          directions touch the language model.
+\end{itemize}
+
+\paragraph{Scaling, last.} The 7B variant of Janus-Pro and the full COCO
+train2017 split are reserved for the final numbers, once the winning
+configurations from RQ2 and RQ3 are identified on the 1B pilot.
+The current programme is intentionally inverted with respect to scale:
+finish the science on the small model, then scale only the configurations
+that matter.
 
 %% -------------------------------------------------------------------
 \section{Engineering Notes and Reproducibility}
+\label{sec:eng_notes}
 %% -------------------------------------------------------------------
-% INTENT: concise "gotchas" log (great future reference + blog material):
-%  - separate conda envs per model family (incompatible transformers versions);
-%  - Janus generation needs max_new_tokens=576 (else truncated -> black images);
-%  - decode_image_tokens output is [-1,1] HWC -> single clean denorm path;
-%  - 4M fixes: all-padding no-grad guard; train/val loss padding-mask bug.
-% Repo: github.com/kaj04/multimodal-peft (envs, scripts, configs).
+
+This section is the project's running list of non-obvious issues and fixes
+we have hit while building the pipeline. They are tedious to rediscover, so
+we keep them in writing.
+
+\paragraph{Separate conda environments per model family.} The three model
+families we touched pin incompatible \texttt{transformers} versions:
+4M's \texttt{ml-4m} stack, Anole's custom fork (which patches
+\texttt{transformers} 4.42.0.dev0), and Janus (recent official
+\texttt{transformers}, requiring \texttt{torch} $\geq 2.5$ for
+\texttt{torch.distributed.tensor}). Installing them in a single environment
+breaks at least one of them. We keep three conda envs (\texttt{4m-peft},
+\texttt{anole}, \texttt{janus}) and a small \texttt{env.sh} per project to
+load modules and activate the right one.
+
+\paragraph{Janus generation needs an explicit \texttt{max\_new\_tokens}.}
+The default \texttt{generation\_config.max\_length}$=20$ silently truncates
+the image-token sequence to far fewer than the $576$ tokens needed for a
+complete image; the VQ-VAE then decodes the truncated sequence to an
+all-black image, with no warning visible at the call site. We set
+\texttt{max\_new\_tokens=576} for any text-to-image generation.
+
+\paragraph{Decoding \texttt{decode\_image\_tokens} output.}
+\texttt{model.decode\_image\_tokens(\dots)} returns a tensor in $[-1, 1]$,
+HWC layout, that requires \texttt{grad} and lives on CUDA. Converting it to
+a PIL image safely requires: (i) \texttt{detach().cpu()} before any NumPy
+conversion (otherwise the conversion in \texttt{processor.postprocess} fails
+because of grad/device); (ii) a single, ordered denormalisation step --- map
+$[-1,1]\to[0,1]$, then clip, then $\times 255 \to$ \texttt{uint8} --- written
+in one place. We centralise this in
+\texttt{eval/metrics.py::decoded\_to\_pil} and route all image-saving
+through it. Splitting the logic across two \texttt{if} branches with
+inconsistent thresholds produced all-black outputs early in the project; the
+single-path version eliminates that class of bug.
+
+\paragraph{Batch size $1$ + gradient accumulation for the pilot.} We keep
+\texttt{batch\_size}$=1$ and use gradient accumulation to reach an effective
+batch size of $8$. This deliberately reuses the single-sample label
+masking validated in the dry-run, and side-steps the kind of cross-sample
+padding bug that, in Part~I, briefly produced an inconsistent train/val
+loss before we caught it. Batched training is a future optimisation.
+
+\paragraph{Output paths visible in Open OnDemand.} On Snellius, the
+OnDemand file browser exposes the home directory but not
+\texttt{/scratch-shared}. We therefore write inspectable artefacts (sample
+captions, generated images, JSON results) under
+\texttt{\textasciitilde/multimodal-peft/janus/.../output/} while leaving
+large data (model cache, datasets) on scratch.
+
+\paragraph{Compute-node internet.} The Snellius GPU nodes do reach the
+public internet, so HuggingFace model downloads and W\&B online logging
+work directly from inside a job. No offline-then-sync workflow is needed,
+contrary to what we had to do on the 4M phase.
+
+\paragraph{Weights \& Biases.} \texttt{wandb login} stores credentials in
+\texttt{\textasciitilde/.netrc}, which is shared across conda envs;
+re-using the existing 4M-phase credentials in the new \texttt{janus} env
+required only \texttt{pip install wandb} (with the env's \texttt{python -m
+pip} to avoid the system-Python install path).
+
+\paragraph{Repository layout.} The repository
+\texttt{github.com/kaj04/multimodal-peft} mirrors the project structure:
+\texttt{ml-4m/} (submodule), \texttt{chameleon/} and \texttt{anole/} for
+the archived exploration code, \texttt{janus/\{tests,eval,train,data\_prep\}}
+for the active line, \texttt{report/} for this document. Each model family
+has a \texttt{tests/} folder with smoke-test scripts mirrored by a SLURM
+launcher with the same name. The single source of truth for image decoding
+and metric computation lives in \texttt{janus/eval/metrics.py}.

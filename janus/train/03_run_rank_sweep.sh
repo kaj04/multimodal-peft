@@ -6,6 +6,7 @@
 #SBATCH --time=06:00:00
 #SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/sweep_slurm_%j.out
 #SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/sweep_slurm_%j.err
+#SBATCH --export=ALL
 
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting
@@ -13,6 +14,10 @@ mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting
 echo "================================================================"
 echo "  Janus-Pro-1B LoRA captioning rank sweep"
 echo "  Started: $(date)"
+echo "  RANKS  = ${RANKS:-<default=2,4,8,16,32,64>}"
+echo "  TRAIN_N=${TRAIN_N:-<default=4000>}  EVAL_N=${EVAL_N:-<default=200>}"
+echo "  GEN_EVAL_N=${GEN_EVAL_N:-<default=30>}  SEED=${SEED:-<default=42>}"
+echo "  LORA_ALPHA_RULE=${LORA_ALPHA_RULE:-<default=2x>}"
 echo "================================================================"
 
 module load 2023

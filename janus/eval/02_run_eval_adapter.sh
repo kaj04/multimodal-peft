@@ -6,12 +6,16 @@
 #SBATCH --time=01:00:00
 #SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting/slurm_%j.out
 #SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting/slurm_%j.err
+#SBATCH --export=ALL
 
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting
 
 echo "================================================================"
 echo "  Cross-modal forgetting eval (adapter OFF vs ON)"
 echo "  Started: $(date)"
+echo "  ADAPTER     = ${ADAPTER:-<default>}"
+echo "  TRAINED_ON  = ${TRAINED_ON:-<default=captioning>}"
+echo "  OUTPUT_TAG  = ${OUTPUT_TAG:-<none>}"
 echo "================================================================"
 
 module load 2023

@@ -397,7 +397,60 @@ LoRA as a less-forgetting alternative to full fine-tuning; the contrast with
 the strong forgetting reported by Anole under full fine-tuning is the most
 interesting comparison this matrix begins to draw.
 
-\subsection{Status of the matrix}
+\subsection{Second row: trained on generation}
+\label{sec:row_generation}
+
+We then trained the symmetric run on the generation direction with the
+custom loss of Section~\ref{sec:dryrun} (same hyperparameters: $4{,}000$
+training images, $1$ epoch, $r{=}8$, batch size $1$ with gradient
+accumulation), saved the adapter, and ran the same before/after probe.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Metric & Adapter off & Adapter on & $\Delta$ \\
+\midrule
+Generation CLIPScore & $30.75$ & $28.79$ & $\mathbf{-1.96}$ \\
+Captioning CIDEr     & $0.224$ & $0.250$ & $+0.026$ \\
+Captioning BLEU-4    & $0.127$ & $0.126$ & $-0.001$ \\
+\bottomrule
+\end{tabular}
+\caption{Second row of the cross-modal transfer matrix: LoRA $r{=}8$ trained
+on generation, evaluated on generation (target) and captioning (cross-modal
+probe). The target CLIPScore moves $-1.96$, which is within the baseline
+standard deviation ($\pm 2.9$ over $n{=}30$); the captioning probe is
+essentially unchanged.}
+\label{tab:row_generation}
+\end{table}
+
+\paragraph{Reading the captioning probe.} The captioning metrics move by less
+than the n-gram tokenisation granularity ($\Delta$ BLEU-4 $=-0.001$,
+$\Delta$ CIDEr $=+0.026$): consistent with no cross-modal forgetting from
+generation to captioning. Inspection of the captions before and after
+confirms this: the model still produces its baseline long-form descriptions
+on the same held-out images, with cosmetic wording changes
+(``\emph{The image shows\dots}'' becomes ``\emph{This image shows\dots}''),
+not stylistic drift.
+
+\paragraph{Reading the generation target.} The CLIPScore decreased by
+$1.96$ points, within noise but in the unexpected direction for a target
+task. This is the more nuanced finding of the pilot: with $4{,}000$ images,
+one epoch, $r{=}8$ and our learning rate, the custom generation loss did not
+produce a positive movement on the alignment probe. Several non-exclusive
+explanations apply: cross-entropy over a $16{,}384$-way codebook is a much
+sparser signal than text cross-entropy and likely needs more data and/or
+more epochs; CLIPScore captures only text-image alignment and may be
+insensitive to a subtler quality change; and the literature on token-based
+generation training (notably the Anole blog) reports a tendency of plain
+cross-entropy on image tokens to drift toward mode collapse, which would
+not be picked up by an alignment metric and would require a reconstruction
+or perceptual term to control. Tightening this row is a clear item for the
+next phase (RQ3 rank sweep on the generation direction with stronger
+metrics, Section~\ref{sec:janus_rqs}).
+
+\subsection{Pilot transfer matrix --- summary}
 
 \begin{table}[h]
 \centering
@@ -406,12 +459,19 @@ interesting comparison this matrix begins to draw.
 \toprule
 \diagbox[width=12em]{train on}{evaluate on} & Captioning (CIDEr) & Generation (CLIPScore) \\
 \midrule
-\textbf{Captioning} & $+1.019$ (target) & $+0.44$ (within noise) \\
-\textbf{Generation} & \emph{in progress} & \emph{in progress} (target) \\
+\textbf{Captioning} & $\Delta+1.019$ (target $\uparrow$) & $\Delta+0.44$ (within noise) \\
+\textbf{Generation} & $\Delta+0.026$ (within noise)      & $\Delta-1.96$ (target, within noise) \\
 \bottomrule
 \end{tabular}
-\caption{Pilot transfer matrix on Janus-Pro-1B with LoRA $r{=}8$ on attention.
-First row populated; the generation row is the next experiment.}
+\caption{Pilot $2\times2$ cross-modal transfer matrix on Janus-Pro-1B with
+LoRA $r{=}8$ on attention (single seed, $n_{\text{cap}}{=}200$,
+$n_{\text{gen}}{=}30$). The diagonal is the trained target; off-diagonal is
+the cross-modal probe (negative = forgetting). Both off-diagonal entries
+sit within the baseline noise of the corresponding metric, so the pilot
+shows \emph{no measurable cross-modal forgetting under LoRA on attention};
+the captioning target is strongly acquired (in large part as a stylistic
+adaptation to COCO references), while the generation target does not move
+in the expected direction with the current hyperparameters.}
 \label{tab:transfer_matrix}
 \end{table}
 
@@ -419,11 +479,15 @@ First row populated; the generation row is the next experiment.}
 % preamble, replace the diagbox cell with a two-line header.
 
 \paragraph{Honest scope of these numbers.} This is a single pilot run at the
-1B scale with one seed and a small evaluation set ($n=30$ for generation in
-particular). It is a working signal, not a definitive result. The next steps
-(Section~\ref{sec:janus_rqs}) sharpen both the experiment (multiple seeds,
-larger probes, stronger generation metrics) and its scope (the second row of
-the matrix, then RQ2 and RQ3).
+1B scale with one seed and small evaluation sets ($n{=}200$ for captioning,
+$n{=}30$ for generation). It is a working signal, not a definitive result.
+The most informative finding is qualitative: LoRA on attention behaves as
+an insulator in both directions of the unified model, in contrast with the
+strong forgetting reported by Anole under full fine-tuning. The least
+informative is the generation diagonal: the target metric did not move in
+the expected direction, indicating that the current configuration is not
+sufficient to drive useful adaptation in that direction --- a focus point
+for the next experiments (Section~\ref{sec:janus_rqs}).
 
 %% -------------------------------------------------------------------
 \section{Updated Research Questions and Directions}

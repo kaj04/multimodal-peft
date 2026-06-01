@@ -52,6 +52,9 @@ N_SAVE     = 5
 # Which direction this adapter was trained on ("captioning" or "generation").
 # Determines the target task (expected to improve) vs the probe (forgetting).
 TRAINED_ON = os.environ.get("TRAINED_ON", "captioning")
+# Optional suffix on output filenames + samples dir, so sweeps don't overwrite
+# each other's JSON. Example: OUTPUT_TAG="r4" -> forgetting_captioning_r4.json
+OUTPUT_TAG = os.environ.get("OUTPUT_TAG", "")
 
 OUTPUT_DIR = Path(os.environ.get(
     "JANUS_OUTPUT_DIR",
@@ -127,7 +130,8 @@ def main():
 
     t0 = time.time()
     # BEFORE: adapter disabled -> base model behavior
-    samples_dir = OUTPUT_DIR / f"samples_{TRAINED_ON}"
+    tag_suffix = f"_{OUTPUT_TAG}" if OUTPUT_TAG else ""
+    samples_dir = OUTPUT_DIR / f"samples_{TRAINED_ON}{tag_suffix}"
     print("  evaluating BEFORE (adapter disabled)...", flush=True)
     with model.disable_adapter():
         before = run_eval(model, processor, eval_ids, id2file, refs, scorer,
@@ -162,7 +166,7 @@ def main():
           f"(Δ {deltas['CLIPScore']:+.2f})   [{gen_role}]")
     print(SEP)
 
-    out = OUTPUT_DIR / f"forgetting_{TRAINED_ON}.json"
+    out = OUTPUT_DIR / f"forgetting_{TRAINED_ON}{tag_suffix}.json"
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"  Results -> {out}")
     print(f"  Before/after samples -> {OUTPUT_DIR / 'samples'}")

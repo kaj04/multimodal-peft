@@ -22,7 +22,12 @@ source activate janus
 # downloads here automatically on first run (and is reused from cache after).
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 
-python ~/multimodal-peft/janus/tests/01_smoke_test.py
+# Use the absolute python of the janus env (safe against PATH leaks).
+JANUS_PY=$HOME/.conda/envs/janus/bin/python
+echo "  python = $JANUS_PY"
+$JANUS_PY --version
+
+$JANUS_PY ~/multimodal-peft/janus/tests/01_smoke_test.py
 
 echo ""
 echo "================================================================"

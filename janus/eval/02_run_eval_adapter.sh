@@ -24,11 +24,17 @@ source activate janus
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 
-# ADAPTER defaults to the captioning run's epoch-1 adapter; override if needed.
-python ~/multimodal-peft/janus/eval/02_eval_adapter.py
+# Use the absolute python of the janus env. The shell-relative `python` can
+# resolve to the SYSTEM Anaconda (python 3.11) instead of the env (3.10) when
+# --export=ALL propagates a broken PATH/CONDA_PREFIX from the launching shell.
+JANUS_PY=$HOME/.conda/envs/janus/bin/python
+echo "  python = $JANUS_PY"
+$JANUS_PY --version
+
+$JANUS_PY ~/multimodal-peft/janus/eval/02_eval_adapter.py
 
 echo ""
 echo "================================================================"
 echo "  Done: $(date)"
-echo "  Report: ~/multimodal-peft/janus/tests/output/forgetting/forgetting_captioning.json"
+echo "  Report dir: ~/multimodal-peft/janus/tests/output/forgetting/"
 echo "================================================================"

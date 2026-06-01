@@ -20,7 +20,12 @@ source activate janus
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 
-python ~/multimodal-peft/janus/tests/02_peft_dryrun.py
+# Use the absolute python of the janus env (safe against PATH leaks).
+JANUS_PY=$HOME/.conda/envs/janus/bin/python
+echo "  python = $JANUS_PY"
+$JANUS_PY --version
+
+$JANUS_PY ~/multimodal-peft/janus/tests/02_peft_dryrun.py
 
 echo ""
 echo "================================================================"

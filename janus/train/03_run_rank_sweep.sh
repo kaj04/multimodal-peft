@@ -26,9 +26,15 @@ source activate janus
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 
+# Use the absolute python of the janus env, otherwise --export=ALL can leak the
+# system Anaconda (python 3.11) and break transformers imports.
+JANUS_PY=$HOME/.conda/envs/janus/bin/python
+echo "  python = $JANUS_PY"
+$JANUS_PY --version
+
 # Default ranks; override with: RANKS=2,4,8 sbatch ...
 # Other overrides: TRAIN_N, EVAL_N, GEN_EVAL_N, EPOCHS, LR, SEED, LORA_ALPHA_RULE
-python ~/multimodal-peft/janus/train/03_rank_sweep.py
+$JANUS_PY ~/multimodal-peft/janus/train/03_rank_sweep.py
 
 echo ""
 echo "================================================================"

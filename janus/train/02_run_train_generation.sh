@@ -20,8 +20,13 @@ source activate janus
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 
+# Use the absolute python of the janus env (safe against PATH leaks).
+JANUS_PY=$HOME/.conda/envs/janus/bin/python
+echo "  python = $JANUS_PY"
+$JANUS_PY --version
+
 # Quick plumbing test first: TRAIN_N=200 sbatch ...
-python ~/multimodal-peft/janus/train/02_train_generation.py
+$JANUS_PY ~/multimodal-peft/janus/train/02_train_generation.py
 
 echo ""
 echo "================================================================"

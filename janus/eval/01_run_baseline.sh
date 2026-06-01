@@ -20,8 +20,13 @@ source activate janus
 
 export HF_HOME=/scratch-shared/tesr125338/hf_cache
 
+# Use the absolute python of the janus env (safe against PATH leaks).
+JANUS_PY=$HOME/.conda/envs/janus/bin/python
+echo "  python = $JANUS_PY"
+$JANUS_PY --version
+
 # Optional overrides: N_CAPTION / N_GEN (defaults 100 / 30)
-python ~/multimodal-peft/janus/eval/01_baseline.py
+$JANUS_PY ~/multimodal-peft/janus/eval/01_baseline.py
 
 echo ""
 echo "================================================================"

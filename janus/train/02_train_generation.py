@@ -13,9 +13,23 @@ PEFT dry-run (gradients confirmed to reach the LoRA params):
     hidden states  --generation_head-->  logits over the image codebook
     cross_entropy(logits, image tokens)   (teacher forcing)
 
-Same minimal-risk setup as the captioning trainer: batch_size=1 + grad accum,
-COCO val2017 disjoint split, W&B logging, CLIPScore eval before/after + adapter
-checkpoints. This is the second half of the cross-modal transfer matrix.
+Setup: batch_size=1 + gradient accumulation, COCO val2017 disjoint split,
+W&B logging, adapter checkpoint per epoch. Compared to the captioning trainer
+this script ships with optimization choices better suited to the sparse signal
+of CE over the 16k-codebook image tokens:
+  - lower LR (5e-5 vs 1e-4): the generation loss is sparser than text CE;
+  - linear warmup (5%) + cosine decay: avoid LoRA degradation in the first
+    few steps and let the schedule decide the late phase;
+  - weight_decay = 0 on LoRA params (decay vs an additive update biases toward 0);
+  - 3 epochs by default instead of 1 (one epoch over 4k samples is too short
+    to see the CLIPScore probe move in our pilot);
+  - mid-epoch CLIPScore probe every EVAL_EVERY_STEPS steps with a small set,
+    so a degradation is visible while training rather than only at the end.
+
+All knobs are env-overridable. The loss itself is unchanged from the dry-run
+(plain CE on image-token IDs); changing the loss is a separate question
+(reconstruction term a la Anole, coarse-to-fine, etc.) we tackle only if
+the better-tuned config still does not move the target.
 
 Run via 02_run_train_generation.sh (needs a GPU).
 """
@@ -45,12 +59,21 @@ VAL_CAPS   = COCO_DIR / "annotations" / "captions_val2017.json"
 TRAIN_N    = int(os.environ.get("TRAIN_N", "4000"))
 EVAL_N     = int(os.environ.get("EVAL_N", "200"))
 GEN_EVAL_N = int(os.environ.get("GEN_EVAL_N", "30"))   # images are slow to gen
-EPOCHS     = int(os.environ.get("EPOCHS", "1"))
+EPOCHS     = int(os.environ.get("EPOCHS", "3"))        # gen needs more than 1
 GRAD_ACCUM = int(os.environ.get("GRAD_ACCUM", "8"))
-LR         = float(os.environ.get("LR", "1e-4"))
-LORA_RANK  = int(os.environ.get("LORA_RANK", "8"))
-LORA_ALPHA = int(os.environ.get("LORA_ALPHA", "16"))
+LR         = float(os.environ.get("LR", "5e-5"))       # lower than text LR; gen loss is sparser
+LORA_RANK  = int(os.environ.get("LORA_RANK", "4"))     # captioning saturates at low r; try the same regime
+LORA_ALPHA = int(os.environ.get("LORA_ALPHA", str(2 * int(os.environ.get("LORA_RANK", "4")))))
 SEED       = int(os.environ.get("SEED", "42"))
+
+# LR schedule + optimisation
+WARMUP_RATIO  = float(os.environ.get("WARMUP_RATIO", "0.05"))   # 5% linear warmup
+WEIGHT_DECAY  = float(os.environ.get("WEIGHT_DECAY", "0.0"))    # 0 on LoRA is standard
+GRAD_CLIP     = float(os.environ.get("GRAD_CLIP", "1.0"))
+
+# Mid-epoch evaluation: every N optimizer steps, do a quick eval with MIN samples
+EVAL_EVERY_STEPS = int(os.environ.get("EVAL_EVERY_STEPS", "100"))
+EVAL_MID_N       = int(os.environ.get("EVAL_MID_N", "10"))      # small for speed
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "janus-peft")
 RUN_NAME      = os.environ.get("RUN_NAME", "gen_1b_r8_valsplit")
@@ -134,14 +157,17 @@ def eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, n):
 
 def main():
     import wandb
-    from transformers import JanusForConditionalGeneration, JanusProcessor
+    from transformers import (JanusForConditionalGeneration, JanusProcessor,
+                              get_cosine_schedule_with_warmup)
     from peft import LoraConfig, get_peft_model, TaskType
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print(SEP)
     print(f"  LoRA GENERATION fine-tune | run={RUN_NAME}")
-    print(f"  TRAIN_N={TRAIN_N} EVAL_N={EVAL_N} GEN_EVAL_N={GEN_EVAL_N} "
-          f"EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} rank={LORA_RANK}")
+    print(f"  TRAIN_N={TRAIN_N} EVAL_N={EVAL_N} GEN_EVAL_N={GEN_EVAL_N}")
+    print(f"  EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} weight_decay={WEIGHT_DECAY}")
+    print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
+    print(f"  eval_every_steps={EVAL_EVERY_STEPS} eval_mid_n={EVAL_MID_N}")
     print(SEP + "\n")
 
     processor = JanusProcessor.from_pretrained(MODEL_ID)
@@ -164,10 +190,19 @@ def main():
     wandb.init(project=WANDB_PROJECT, name=RUN_NAME, config={
         "model": MODEL_ID, "direction": "generation", "train_n": TRAIN_N,
         "epochs": EPOCHS, "grad_accum": GRAD_ACCUM, "lr": LR,
-        "lora_rank": LORA_RANK, "lora_alpha": LORA_ALPHA, "seed": SEED,
+        "weight_decay": WEIGHT_DECAY, "warmup_ratio": WARMUP_RATIO,
+        "grad_clip": GRAD_CLIP, "lora_rank": LORA_RANK,
+        "lora_alpha": LORA_ALPHA, "seed": SEED,
+        "schedule": "linear_warmup_cosine",
     })
 
-    optimizer = torch.optim.AdamW(trainable, lr=LR)
+    # AdamW + cosine schedule with linear warmup.
+    # Total optimizer steps over the whole run determine the cosine length.
+    total_steps  = (len(train_ids) // GRAD_ACCUM) * EPOCHS
+    warmup_steps = max(1, int(WARMUP_RATIO * total_steps))
+    print(f"  total optimizer steps: {total_steps}  warmup: {warmup_steps}\n", flush=True)
+    optimizer = torch.optim.AdamW(trainable, lr=LR, weight_decay=WEIGHT_DECAY)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
     print("  measuring baseline CLIPScore (pre-training)...", flush=True)
     base_clip = eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, GEN_EVAL_N)
@@ -191,17 +226,28 @@ def main():
             running += loss.item()
 
             if (i + 1) % GRAD_ACCUM == 0:
-                gnorm = torch.nn.utils.clip_grad_norm_(trainable, 1.0)
+                gnorm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
                 optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
                 avg = running / GRAD_ACCUM
                 running = 0.0
-                wandb.log({"train/loss": avg, "train/lr": LR,
+                cur_lr = scheduler.get_last_lr()[0]
+                wandb.log({"train/loss": avg, "train/lr": cur_lr,
                            "train/grad_norm": float(gnorm), "step": global_step})
                 if global_step % 20 == 0:
                     print(f"  epoch {epoch} step {global_step} "
-                          f"({i+1}/{len(order)}) loss={avg:.4f}", flush=True)
+                          f"({i+1}/{len(order)}) loss={avg:.4f} lr={cur_lr:.2e}",
+                          flush=True)
+
+                # Mid-epoch eval: cheap CLIPScore probe to see direction live.
+                if EVAL_EVERY_STEPS > 0 and global_step % EVAL_EVERY_STEPS == 0:
+                    mid_clip = eval_clipscore(base, processor, scorer,
+                                              eval_ids, id2file, refs, EVAL_MID_N)
+                    print(f"    [mid-eval @ step {global_step}] "
+                          f"CLIPScore({EVAL_MID_N})={mid_clip:.2f}", flush=True)
+                    wandb.log({"eval/CLIPScore_mid": mid_clip, "step": global_step})
 
         clip = eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, GEN_EVAL_N)
         print(f"  [epoch {epoch}] CLIPScore={clip:.2f}", flush=True)

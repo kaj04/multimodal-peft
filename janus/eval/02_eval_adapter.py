@@ -77,34 +77,67 @@ def load_eval_split():
 
 
 def run_eval(model, processor, eval_ids, id2file, refs, scorer, tag, save_dir):
-    """Captioning (all eval_ids) + generation CLIPScore (first GEN_EVAL_N)."""
+    """Captioning (all eval_ids) + generation CLIPScore (first GEN_EVAL_N).
+
+    For captioning we report:
+      - CIDEr, BLEU-4 : n-gram match against COCO references (style + content)
+      - CLIPScore_cap : CLIP cosine between the image and the GENERATED caption
+                        -- a content-aware probe insensitive to wording style.
+                        Useful because CIDEr can rise from purely stylistic
+                        adaptation toward terse COCO references.
+
+    For generation we report:
+      - CLIPScore_gen : CLIP cosine between the GENERATED image and its prompt
+                        (the cross-modal probe used for forgetting).
+    """
     save_dir.mkdir(parents=True, exist_ok=True)
-    # Captioning
-    hyps, cap_samples = {}, []
+
+    # --- Captioning: generate captions on all eval ids
+    hyps, cap_samples, cap_clip_vals = {}, [], []
     for k, img_id in enumerate(eval_ids):
         image = Image.open(VAL_IMAGES / id2file[img_id]).convert("RGB")
-        hyps[img_id] = generate_caption(model, processor, image)
+        gen_cap = generate_caption(model, processor, image)
+        hyps[img_id] = gen_cap
+        # CLIPScore on (image, generated caption): content-aware probe
+        cap_clip_vals.append(scorer.score(image, gen_cap))
         if k < N_SAVE:
-            cap_samples.append({"image": id2file[img_id], "caption": hyps[img_id]})
+            cap_samples.append({"image": id2file[img_id], "caption": gen_cap})
     cap = captioning_scores(refs, hyps)
+    clip_cap = float(np.mean(cap_clip_vals))
 
-    # Generation (fix seed so before/after see the same sampling noise)
+    # --- Generation: CLIPScore on (generated image, prompt)
     gen_ids = eval_ids[:GEN_EVAL_N]
-    vals = []
+    gen_clip_vals = []
     for k, img_id in enumerate(gen_ids):
         torch.manual_seed(SEED + k)
         prompt = refs[img_id][0]
         img = generate_image(model, processor, prompt)
-        vals.append(scorer.score(img, prompt))
+        gen_clip_vals.append(scorer.score(img, prompt))
         if k < N_SAVE:
             img.save(save_dir / f"{k:02d}_{img_id}_{tag}.png")
-    clip_mean = float(np.mean(vals))
+    clip_gen = float(np.mean(gen_clip_vals))
 
     print(f"  [{tag}] CIDEr={cap['CIDEr']:.4f} BLEU_4={cap['BLEU_4']:.4f} "
-          f"CLIPScore={clip_mean:.2f}", flush=True)
-    return {"CIDEr": cap["CIDEr"], "BLEU_4": cap["BLEU_4"],
-            "CLIPScore": clip_mean, "n_cap": cap["n"], "n_gen": len(vals),
+          f"CLIPScore_cap={clip_cap:.2f} CLIPScore_gen={clip_gen:.2f}",
+          flush=True)
+    return {"CIDEr":          cap["CIDEr"],
+            "BLEU_4":         cap["BLEU_4"],
+            "CLIPScore":      clip_gen,     # kept for backward-compatibility
+            "CLIPScore_gen":  clip_gen,
+            "CLIPScore_cap":  clip_cap,
+            "n_cap": cap["n"], "n_gen": len(gen_clip_vals),
             "caption_samples": cap_samples}
+
+
+def reference_clipscore(processor, scorer, eval_ids, id2file, refs):
+    """CLIPScore of (image, FIRST COCO reference caption) on the same eval set.
+    A model-independent ceiling: how well do humans' captions align with the
+    images under CLIP? Computed once per run."""
+    vals = []
+    for img_id in eval_ids:
+        image = Image.open(VAL_IMAGES / id2file[img_id]).convert("RGB")
+        vals.append(scorer.score(image, refs[img_id][0]))
+    return float(np.mean(vals))
 
 
 def main():
@@ -141,14 +174,21 @@ def main():
     after = run_eval(model, processor, eval_ids, id2file, refs, scorer,
                      "after", samples_dir)
 
+    # Model-independent ceiling: how aligned are the human COCO references?
+    print("  measuring reference (human) CLIPScore ceiling...", flush=True)
+    ref_clip_cap = reference_clipscore(processor, scorer, eval_ids, id2file, refs)
+
     deltas = {
-        "CIDEr":     after["CIDEr"] - before["CIDEr"],
-        "BLEU_4":    after["BLEU_4"] - before["BLEU_4"],
-        "CLIPScore": after["CLIPScore"] - before["CLIPScore"],
+        "CIDEr":          after["CIDEr"]          - before["CIDEr"],
+        "BLEU_4":         after["BLEU_4"]         - before["BLEU_4"],
+        "CLIPScore":      after["CLIPScore"]      - before["CLIPScore"],       # back-compat
+        "CLIPScore_gen":  after["CLIPScore_gen"]  - before["CLIPScore_gen"],
+        "CLIPScore_cap":  after["CLIPScore_cap"]  - before["CLIPScore_cap"],
     }
     results = {"model": MODEL_ID, "adapter": ADAPTER,
                "trained_on": TRAINED_ON,
                "before": before, "after": after, "delta": deltas,
+               "reference_CLIPScore_cap": ref_clip_cap,
                "minutes": round((time.time() - t0) / 60, 1)}
 
     # Label which metric is the trained target vs the cross-modal probe
@@ -160,10 +200,13 @@ def main():
     print("\n" + SEP)
     print(f"  FORGETTING SUMMARY  (trained on {TRAINED_ON})")
     print(SEP)
-    print(f"  Captioning CIDEr : {before['CIDEr']:.4f} -> {after['CIDEr']:.4f}  "
-          f"(Δ {deltas['CIDEr']:+.4f})   [{cap_role}]")
-    print(f"  Generation CLIP  : {before['CLIPScore']:.2f} -> {after['CLIPScore']:.2f}  "
-          f"(Δ {deltas['CLIPScore']:+.2f})   [{gen_role}]")
+    print(f"  Captioning CIDEr     : {before['CIDEr']:.4f} -> {after['CIDEr']:.4f}  "
+          f"(Δ {deltas['CIDEr']:+.4f})   [{cap_role}, style+content]")
+    print(f"  Captioning CLIP(img,gen-cap): {before['CLIPScore_cap']:.2f} -> {after['CLIPScore_cap']:.2f}  "
+          f"(Δ {deltas['CLIPScore_cap']:+.2f})   [{cap_role}, content-aware]")
+    print(f"  Generation CLIP(gen-img,prompt): {before['CLIPScore_gen']:.2f} -> {after['CLIPScore_gen']:.2f}  "
+          f"(Δ {deltas['CLIPScore_gen']:+.2f})   [{gen_role}]")
+    print(f"  Reference CLIP ceiling (human caps): {ref_clip_cap:.2f}")
     print(SEP)
 
     out = OUTPUT_DIR / f"forgetting_{TRAINED_ON}{tag_suffix}.json"

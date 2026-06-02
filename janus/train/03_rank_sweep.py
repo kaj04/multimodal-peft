@@ -82,7 +82,7 @@ def already_done(rank: int) -> bool:
 def row_from_json(rank: int) -> dict:
     """Build a summary row by reading the per-rank forgetting JSON on disk."""
     data = json.loads(rank_json_path(rank).read_text())
-    return {
+    row = {
         "rank": rank, "status": "ok",
         "alpha": alpha_for(rank),
         "delta_CIDEr":     data["delta"]["CIDEr"],
@@ -93,6 +93,16 @@ def row_from_json(rank: int) -> dict:
         "before_CLIP":   data["before"]["CLIPScore"],
         "after_CLIP":    data["after"]["CLIPScore"],
     }
+    # New content-aware captioning probe (only present in JSONs from the
+    # updated evaluator; old JSONs leave these as None).
+    delta = data.get("delta", {})
+    before = data.get("before", {})
+    after = data.get("after", {})
+    row["delta_CLIPScore_cap"]  = delta.get("CLIPScore_cap")
+    row["before_CLIPScore_cap"] = before.get("CLIPScore_cap")
+    row["after_CLIPScore_cap"]  = after.get("CLIPScore_cap")
+    row["reference_CLIPScore_cap"] = data.get("reference_CLIPScore_cap")
+    return row
 
 
 def run_subprocess(label: str, env: dict, script: Path) -> int:

@@ -48,7 +48,9 @@ def write_csv(rows, csv_path: Path):
     cols = ["rank", "alpha",
             "before_CIDEr", "after_CIDEr", "delta_CIDEr",
             "delta_BLEU_4",
-            "before_CLIP", "after_CLIP", "delta_CLIPScore"]
+            "before_CLIP", "after_CLIP", "delta_CLIPScore",
+            "before_CLIPScore_cap", "after_CLIPScore_cap",
+            "delta_CLIPScore_cap", "reference_CLIPScore_cap"]
     with csv_path.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -57,44 +59,70 @@ def write_csv(rows, csv_path: Path):
 
 
 def make_plot(rows, png_path: Path):
-    ranks  = [r["rank"]            for r in rows]
-    dcider = [r["delta_CIDEr"]     for r in rows]
-    dclip  = [r["delta_CLIPScore"] for r in rows]
+    """Two stacked panels:
+       (top)    delta CIDEr (style+content) vs delta CLIPScore_cap (content-aware)
+                -- both on the captioning target. If they diverge -> the CIDEr
+                gain is stylistic, not content.
+       (bottom) delta CLIPScore_gen (generation probe) -- cross-modal forgetting.
+    """
+    ranks   = [r["rank"]                       for r in rows]
+    dcider  = [r["delta_CIDEr"]                for r in rows]
+    dcapclip = [r.get("delta_CLIPScore_cap") for r in rows]
+    has_capclip = all(v is not None for v in dcapclip)
+    dgenclip = [r["delta_CLIPScore"]           for r in rows]
 
-    fig, ax1 = plt.subplots(figsize=(7.5, 4.8))
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(7.5, 7.0), sharex=True,
+        gridspec_kw={"height_ratios": [1.2, 1.0]})
 
-    color_cap = "tab:blue"
-    color_gen = "tab:red"
-
-    l1 = ax1.plot(ranks, dcider, "-o", color=color_cap,
-                  label=r"$\Delta$ CIDEr (captioning target)")
-    ax1.set_xlabel("LoRA rank")
-    ax1.set_ylabel(r"$\Delta$ CIDEr (target task)", color=color_cap)
-    ax1.tick_params(axis="y", labelcolor=color_cap)
-    ax1.set_xscale("log", base=2)
-    ax1.set_xticks(ranks)
-    ax1.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-    ax1.axhline(0, color=color_cap, linestyle=":", linewidth=0.8, alpha=0.5)
+    # --- Top: CIDEr (style+content) vs CLIPScore_cap (content only)
+    color_cider = "tab:blue"
+    color_capclip = "tab:green"
+    ax_top.plot(ranks, dcider, "-o", color=color_cider,
+                label=r"$\Delta$ CIDEr (n-gram, style$+$content)")
+    ax_top.axhline(0, color="black", linestyle=":", linewidth=0.6, alpha=0.5)
     for x, y in zip(ranks, dcider):
-        ax1.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
-                     xytext=(0, 8), ha="center", fontsize=8, color=color_cap)
+        ax_top.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
+                        xytext=(0, 8), ha="center", fontsize=8, color=color_cider)
+    ax_top.set_ylabel(r"$\Delta$ CIDEr", color=color_cider)
+    ax_top.tick_params(axis="y", labelcolor=color_cider)
 
-    ax2 = ax1.twinx()
-    l2 = ax2.plot(ranks, dclip, "-s", color=color_gen,
-                  label=r"$\Delta$ CLIPScore (generation probe)")
-    ax2.set_ylabel(r"$\Delta$ CLIPScore (cross-modal probe)", color=color_gen)
-    ax2.tick_params(axis="y", labelcolor=color_gen)
-    ax2.axhline(0, color=color_gen, linestyle=":", linewidth=0.8, alpha=0.5)
-    for x, y in zip(ranks, dclip):
-        ax2.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
-                     xytext=(0, -14), ha="center", fontsize=8, color=color_gen)
+    if has_capclip:
+        ax_top_r = ax_top.twinx()
+        ax_top_r.plot(ranks, dcapclip, "-D", color=color_capclip,
+                      label=r"$\Delta$ CLIPScore(img, gen-cap) (content-aware)")
+        ax_top_r.set_ylabel(r"$\Delta$ CLIPScore (caption)", color=color_capclip)
+        ax_top_r.tick_params(axis="y", labelcolor=color_capclip)
+        ax_top_r.axhline(0, color=color_capclip, linestyle=":", linewidth=0.6, alpha=0.5)
+        for x, y in zip(ranks, dcapclip):
+            ax_top_r.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
+                              xytext=(0, -14), ha="center", fontsize=8,
+                              color=color_capclip)
+        ax_top.legend(loc="upper left", fontsize=8)
+        ax_top_r.legend(loc="upper right", fontsize=8)
+    else:
+        ax_top.legend(loc="best", fontsize=9)
+    ax_top.set_title("Captioning target: n-gram metric vs content-aware metric",
+                     fontsize=10)
 
-    plt.title("LoRA rank sweep on captioning (Janus-Pro-1B)\n"
-              "task gain vs cross-modal forgetting", fontsize=10)
-    lines = l1 + l2
-    labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc="best", fontsize=9)
+    # --- Bottom: cross-modal forgetting probe
+    color_gen = "tab:red"
+    ax_bot.plot(ranks, dgenclip, "-s", color=color_gen,
+                label=r"$\Delta$ CLIPScore (gen probe, cross-modal forgetting)")
+    ax_bot.axhline(0, color=color_gen, linestyle=":", linewidth=0.8, alpha=0.5)
+    for x, y in zip(ranks, dgenclip):
+        ax_bot.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
+                        xytext=(0, 8), ha="center", fontsize=8, color=color_gen)
+    ax_bot.set_ylabel(r"$\Delta$ CLIPScore (generation)", color=color_gen)
+    ax_bot.tick_params(axis="y", labelcolor=color_gen)
+    ax_bot.set_xlabel("LoRA rank")
+    ax_bot.set_xscale("log", base=2)
+    ax_bot.set_xticks(ranks)
+    ax_bot.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+    ax_bot.legend(loc="best", fontsize=9)
+    ax_bot.set_title("Cross-modal forgetting probe", fontsize=10)
 
+    fig.suptitle("LoRA rank sweep on captioning (Janus-Pro-1B)", fontsize=11)
     plt.tight_layout()
     plt.savefig(png_path, dpi=150)
     plt.close()

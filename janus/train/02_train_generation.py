@@ -75,6 +75,11 @@ GRAD_CLIP     = float(os.environ.get("GRAD_CLIP", "1.0"))
 EVAL_EVERY_STEPS = int(os.environ.get("EVAL_EVERY_STEPS", "100"))
 EVAL_MID_N       = int(os.environ.get("EVAL_MID_N", "10"))      # small for speed
 
+# Resume capability: save full training state (adapter + optimizer + scheduler +
+# RNG + counters) so a crashed or time-limited run can pick up where it left off.
+SAVE_EVERY_STEPS = int(os.environ.get("SAVE_EVERY_STEPS", "0"))   # 0 = only at epoch end
+RESUME           = os.environ.get("RESUME", "1") == "1"           # default: auto-resume if state exists
+
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "janus-peft")
 RUN_NAME      = os.environ.get("RUN_NAME", "gen_1b_r8_valsplit")
 
@@ -137,6 +142,55 @@ def generation_loss(base, processor, image, caption):
         logits.reshape(-1, logits.shape[-1]).float(),
         image_tokens.reshape(-1).long(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint helpers (resume from crash / time-limit)
+# ---------------------------------------------------------------------------
+
+def save_checkpoint(out_dir, peft_model, optimizer, scheduler,
+                    epoch, global_step, base_clip, history):
+    """Save the full training state. Adapter is saved separately by PEFT
+    (HF-compatible folder); the rest goes into state.pt so a resume restores
+    everything end-to-end."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    peft_model.save_pretrained(str(out_dir / "adapter"))
+    torch.save({
+        "optimizer":   optimizer.state_dict(),
+        "scheduler":   scheduler.state_dict(),
+        "epoch":       epoch,
+        "global_step": global_step,
+        "base_clip":   base_clip,
+        "history":     history,
+        "torch_rng":   torch.get_rng_state(),
+        "cuda_rng":    (torch.cuda.get_rng_state_all()
+                        if torch.cuda.is_available() else None),
+    }, out_dir / "state.pt")
+
+
+def load_checkpoint_if_present(ckpt_dir, base, optimizer, scheduler):
+    """If ckpt_dir/state.pt exists, restore everything and return the resume
+    point as (start_epoch, global_step, base_clip, history). Otherwise return
+    (0, 0, None, {})."""
+    state_path = ckpt_dir / "state.pt"
+    adapter_dir = ckpt_dir / "adapter"
+    if not (state_path.exists() and adapter_dir.exists()):
+        return 0, 0, None, {"baseline_clipscore": None, "epochs": []}
+
+    from peft import PeftModel
+    print(f"  RESUMING from {ckpt_dir}", flush=True)
+    # Re-load the saved adapter weights on top of the (already-LoRA-injected) model
+    PeftModel.from_pretrained(base, str(adapter_dir), is_trainable=True,
+                              adapter_name="default")
+    s = torch.load(state_path, map_location="cpu")
+    optimizer.load_state_dict(s["optimizer"])
+    scheduler.load_state_dict(s["scheduler"])
+    torch.set_rng_state(s["torch_rng"])
+    if s.get("cuda_rng") is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(s["cuda_rng"])
+    print(f"  resumed at epoch={s['epoch']} global_step={s['global_step']}",
+          flush=True)
+    return s["epoch"], s["global_step"], s["base_clip"], s["history"]
 
 
 @torch.no_grad()
@@ -204,18 +258,27 @@ def main():
     optimizer = torch.optim.AdamW(trainable, lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
-    print("  measuring baseline CLIPScore (pre-training)...", flush=True)
-    base_clip = eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, GEN_EVAL_N)
-    print(f"  baseline CLIPScore={base_clip:.2f}", flush=True)
-    wandb.log({"eval/CLIPScore": base_clip, "epoch": 0})
-    history = {"baseline_clipscore": base_clip, "epochs": []}
+    # Try to resume from a 'latest/' checkpoint in this RUN's OUTPUT_DIR.
+    latest_dir = OUTPUT_DIR / "latest"
+    start_epoch, global_step, base_clip, history = (0, 0, None, None)
+    if RESUME:
+        start_epoch, global_step, base_clip, history = load_checkpoint_if_present(
+            latest_dir, base, optimizer, scheduler)
 
-    global_step = 0
+    if base_clip is None:
+        print("  measuring baseline CLIPScore (pre-training)...", flush=True)
+        base_clip = eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, GEN_EVAL_N)
+        print(f"  baseline CLIPScore={base_clip:.2f}", flush=True)
+        wandb.log({"eval/CLIPScore": base_clip, "epoch": 0})
+        history = {"baseline_clipscore": base_clip, "epochs": []}
+    else:
+        print(f"  resumed; baseline CLIPScore={base_clip:.2f}", flush=True)
+
     optimizer.zero_grad()
     rng = random.Random(SEED)
     t_start = time.time()
 
-    for epoch in range(EPOCHS):
+    for epoch in range(start_epoch, EPOCHS):
         order = train_ids[:]
         rng.shuffle(order)
         running = 0.0
@@ -249,13 +312,25 @@ def main():
                           f"CLIPScore({EVAL_MID_N})={mid_clip:.2f}", flush=True)
                     wandb.log({"eval/CLIPScore_mid": mid_clip, "step": global_step})
 
+                # Periodic full checkpoint (optional, for very long runs).
+                if SAVE_EVERY_STEPS > 0 and global_step % SAVE_EVERY_STEPS == 0:
+                    save_checkpoint(latest_dir, peft_model, optimizer, scheduler,
+                                    epoch, global_step, base_clip, history)
+                    print(f"    saved checkpoint @ step {global_step}", flush=True)
+
         clip = eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, GEN_EVAL_N)
         print(f"  [epoch {epoch}] CLIPScore={clip:.2f}", flush=True)
         wandb.log({"eval/CLIPScore": clip, "epoch": epoch + 1})
         history["epochs"].append({"epoch": epoch + 1, "CLIPScore": clip})
-        ckpt = OUTPUT_DIR / f"adapter_epoch{epoch+1}"
-        peft_model.save_pretrained(ckpt)
-        print(f"  saved adapter -> {ckpt}", flush=True)
+
+        # Two checkpoints per epoch: a permanent per-epoch adapter (for later
+        # forgetting eval / matrix rows), and a 'latest' full state for resume.
+        per_epoch = OUTPUT_DIR / f"adapter_epoch{epoch+1}"
+        peft_model.save_pretrained(str(per_epoch))
+        print(f"  saved adapter -> {per_epoch}", flush=True)
+        save_checkpoint(latest_dir, peft_model, optimizer, scheduler,
+                        epoch + 1, global_step, base_clip, history)
+        print(f"  saved resume state -> {latest_dir}", flush=True)
 
     history["minutes"] = round((time.time() - t_start) / 60, 1)
     (OUTPUT_DIR / "history.json").write_text(json.dumps(history, indent=2),

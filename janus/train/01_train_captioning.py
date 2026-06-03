@@ -52,12 +52,18 @@ SEED       = int(os.environ.get("SEED", "42"))
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "janus-peft")
 RUN_NAME      = os.environ.get("RUN_NAME", "cap_1b_r8_valsplit")
 
-# Caption target sampling. By default we use refs[img_id][0] -- the first of
-# COCO's ~5 references per image -- exactly like the rank sweep. Set
-# RANDOM_CAPTION_SAMPLING=1 to pick a random reference per (image, step), which
-# exposes the model to the stylistic diversity of the 5 annotators instead of
-# fitting a single one. Same number of examples per epoch, same wall time.
-RANDOM_CAPTION_SAMPLING = os.environ.get("RANDOM_CAPTION_SAMPLING", "0") == "1"
+# Caption target strategy. COCO provides ~5 references per image; we test three:
+#   "first"   -- refs[img_id][0] only, as in the rank sweep. Default.
+#   "random"  -- pick a random reference per training step (stylistic diversity,
+#                same wall time as "first").
+#   "concat"  -- concatenate all ~5 references into a single longer target
+#                (5x longer text per example -> ~1.5-2x slower than "first").
+# Back-compatibility: if RANDOM_CAPTION_SAMPLING=1 is set, it overrides to "random".
+CAPTION_STRATEGY = os.environ.get("CAPTION_STRATEGY", "first").lower()
+if os.environ.get("RANDOM_CAPTION_SAMPLING", "0") == "1":
+    CAPTION_STRATEGY = "random"
+assert CAPTION_STRATEGY in {"first", "random", "concat"}, \
+    f"invalid CAPTION_STRATEGY={CAPTION_STRATEGY!r}"
 
 OUTPUT_DIR = Path(os.environ.get(
     "JANUS_OUTPUT_DIR",
@@ -158,7 +164,7 @@ def main():
     print(f"  LoRA captioning fine-tune | run={RUN_NAME}")
     print(f"  TRAIN_N={TRAIN_N} EVAL_N={EVAL_N} EPOCHS={EPOCHS} "
           f"GRAD_ACCUM={GRAD_ACCUM} LR={LR} rank={LORA_RANK}")
-    print(f"  random_caption_sampling={RANDOM_CAPTION_SAMPLING}")
+    print(f"  caption_strategy={CAPTION_STRATEGY}")
     print(SEP + "\n")
 
     # Model + LoRA
@@ -182,7 +188,7 @@ def main():
         "model": MODEL_ID, "train_n": TRAIN_N, "eval_n": EVAL_N, "epochs": EPOCHS,
         "grad_accum": GRAD_ACCUM, "lr": LR, "lora_rank": LORA_RANK,
         "lora_alpha": LORA_ALPHA, "seed": SEED,
-        "random_caption_sampling": RANDOM_CAPTION_SAMPLING,
+        "caption_strategy": CAPTION_STRATEGY,
     })
 
     optimizer = torch.optim.AdamW(trainable, lr=LR)
@@ -208,12 +214,17 @@ def main():
         running = 0.0
         for i, img_id in enumerate(order):
             image = Image.open(VAL_IMAGES / id2file[img_id]).convert("RGB")
-            # Default: first reference (matches the rank sweep exactly).
-            # If RANDOM_CAPTION_SAMPLING=1: pick a random reference per step,
-            # exposing the model to the 5 stylistic variants of each image.
-            target_caption = (caption_rng.choice(refs[img_id])
-                              if RANDOM_CAPTION_SAMPLING
-                              else refs[img_id][0])
+            # Pick the training target according to CAPTION_STRATEGY:
+            #   "first"  -> single fixed reference (rank sweep behaviour)
+            #   "random" -> random reference per step (stylistic diversity)
+            #   "concat" -> all references concatenated into one longer target
+            if CAPTION_STRATEGY == "first":
+                target_caption = refs[img_id][0]
+            elif CAPTION_STRATEGY == "random":
+                target_caption = caption_rng.choice(refs[img_id])
+            else:   # "concat"
+                target_caption = " ".join(c.strip().rstrip(".") + "."
+                                          for c in refs[img_id])
             batch = build_caption_inputs(model, processor, image, target_caption)
             out = model(**batch)
             loss = out.loss / GRAD_ACCUM

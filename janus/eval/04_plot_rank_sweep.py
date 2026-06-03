@@ -72,25 +72,31 @@ def make_plot(rows, png_path: Path):
     dgenclip = [r["delta_CLIPScore"]           for r in rows]
 
     fig, (ax_top, ax_bot) = plt.subplots(
-        2, 1, figsize=(7.5, 7.0), sharex=True,
+        2, 1, figsize=(8.0, 8.0), sharex=True,
         gridspec_kw={"height_ratios": [1.2, 1.0]})
 
     # --- Top: CIDEr (style+content) vs CLIPScore_cap (content only)
     color_cider = "tab:blue"
     color_capclip = "tab:green"
-    ax_top.plot(ranks, dcider, "-o", color=color_cider,
-                label=r"$\Delta$ CIDEr (n-gram, style$+$content)")
+    l1 = ax_top.plot(ranks, dcider, "-o", color=color_cider,
+                     label=r"$\Delta$ CIDEr (n-gram, style$+$content)")
     ax_top.axhline(0, color="black", linestyle=":", linewidth=0.6, alpha=0.5)
     for x, y in zip(ranks, dcider):
         ax_top.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
-                        xytext=(0, 8), ha="center", fontsize=8, color=color_cider)
+                        xytext=(0, 9), ha="center", fontsize=8, color=color_cider)
     ax_top.set_ylabel(r"$\Delta$ CIDEr", color=color_cider)
     ax_top.tick_params(axis="y", labelcolor=color_cider)
+    # Pad the y-limits so annotations + legend don't overlap the data points.
+    if dcider:
+        y_min, y_max = min(dcider), max(dcider)
+        pad = max(0.1, 0.2 * (y_max - y_min) if y_max != y_min else 0.2)
+        ax_top.set_ylim(min(0, y_min) - pad, y_max + 1.5 * pad)
 
+    lines, labels = list(l1), [l.get_label() for l in l1]
     if has_capclip:
         ax_top_r = ax_top.twinx()
-        ax_top_r.plot(ranks, dcapclip, "-D", color=color_capclip,
-                      label=r"$\Delta$ CLIPScore(img, gen-cap) (content-aware)")
+        l2 = ax_top_r.plot(ranks, dcapclip, "-D", color=color_capclip,
+                           label=r"$\Delta$ CLIPScore(img, gen-cap) (content-aware)")
         ax_top_r.set_ylabel(r"$\Delta$ CLIPScore (caption)", color=color_capclip)
         ax_top_r.tick_params(axis="y", labelcolor=color_capclip)
         ax_top_r.axhline(0, color=color_capclip, linestyle=":", linewidth=0.6, alpha=0.5)
@@ -98,12 +104,19 @@ def make_plot(rows, png_path: Path):
             ax_top_r.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
                               xytext=(0, -14), ha="center", fontsize=8,
                               color=color_capclip)
-        ax_top.legend(loc="upper left", fontsize=8)
-        ax_top_r.legend(loc="upper right", fontsize=8)
-    else:
-        ax_top.legend(loc="best", fontsize=9)
+        if dcapclip:
+            yr_min, yr_max = min(dcapclip), max(dcapclip)
+            padr = max(0.5, 0.3 * (yr_max - yr_min) if yr_max != yr_min else 0.5)
+            ax_top_r.set_ylim(yr_min - 1.5 * padr, max(0, yr_max) + padr)
+        lines += list(l2)
+        labels += [l.get_label() for l in l2]
+
+    # Single combined legend placed BELOW the top panel so it can never overlap
+    # the data points (which sit near the top of the panel).
+    ax_top.legend(lines, labels, loc="upper center", bbox_to_anchor=(0.5, -0.07),
+                  ncol=1 if len(lines) < 2 else 2, fontsize=8, frameon=True)
     ax_top.set_title("Captioning target: n-gram metric vs content-aware metric",
-                     fontsize=10)
+                     fontsize=10, pad=10)
 
     # --- Bottom: cross-modal forgetting probe
     color_gen = "tab:red"
@@ -112,19 +125,25 @@ def make_plot(rows, png_path: Path):
     ax_bot.axhline(0, color=color_gen, linestyle=":", linewidth=0.8, alpha=0.5)
     for x, y in zip(ranks, dgenclip):
         ax_bot.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
-                        xytext=(0, 8), ha="center", fontsize=8, color=color_gen)
+                        xytext=(0, 9), ha="center", fontsize=8, color=color_gen)
     ax_bot.set_ylabel(r"$\Delta$ CLIPScore (generation)", color=color_gen)
     ax_bot.tick_params(axis="y", labelcolor=color_gen)
+    if dgenclip:
+        y_min, y_max = min(dgenclip), max(dgenclip)
+        pad = max(0.1, 0.2 * (y_max - y_min) if y_max != y_min else 0.1)
+        ax_bot.set_ylim(min(0, y_min) - pad, y_max + 1.5 * pad)
     ax_bot.set_xlabel("LoRA rank")
     ax_bot.set_xscale("log", base=2)
     ax_bot.set_xticks(ranks)
     ax_bot.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-    ax_bot.legend(loc="best", fontsize=9)
-    ax_bot.set_title("Cross-modal forgetting probe", fontsize=10)
+    ax_bot.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18),
+                  fontsize=9, frameon=True)
+    ax_bot.set_title("Cross-modal forgetting probe", fontsize=10, pad=8)
 
     fig.suptitle("LoRA rank sweep on captioning (Janus-Pro-1B)", fontsize=11)
-    plt.tight_layout()
-    plt.savefig(png_path, dpi=150)
+    # Reserve extra vertical space between/below panels for the external legends.
+    fig.subplots_adjust(top=0.93, bottom=0.10, hspace=0.45)
+    plt.savefig(png_path, dpi=150, bbox_inches="tight")
     plt.close()
 
 

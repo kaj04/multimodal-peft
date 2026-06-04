@@ -66,6 +66,14 @@ LORA_RANK  = int(os.environ.get("LORA_RANK", "4"))     # captioning saturates at
 LORA_ALPHA = int(os.environ.get("LORA_ALPHA", str(2 * int(os.environ.get("LORA_RANK", "4")))))
 SEED       = int(os.environ.get("SEED", "42"))
 
+# Loss design. Default = plain CE on VQ tokens (Janus' pretraining objective).
+# Setting RECON_LOSS_WEIGHT > 0 adds a reconstruction term on the VQ-VAE
+# codebook embedding space, following the recipe in the Anole blog
+# (weight ~0.5 reportedly avoids the mode-collapse failure of plain CE).
+# Total loss = CE + RECON_LOSS_WEIGHT * MSE(softmax(logits) @ codebook,
+#                                            codebook[target_tokens])
+RECON_LOSS_WEIGHT = float(os.environ.get("RECON_LOSS_WEIGHT", "0.0"))
+
 # LR schedule + optimisation
 WARMUP_RATIO  = float(os.environ.get("WARMUP_RATIO", "0.05"))   # 5% linear warmup
 WEIGHT_DECAY  = float(os.environ.get("WEIGHT_DECAY", "0.0"))    # 0 on LoRA is standard
@@ -112,8 +120,52 @@ def load_split():
 # Custom generation training step (validated in the dry-run)
 # ---------------------------------------------------------------------------
 
-def generation_loss(base, processor, image, caption):
-    """One text->image teacher-forced step; returns the CE loss (with grad)."""
+def _find_vq_codebook(vqmodel):
+    """Locate the VQ codebook embedding tensor (16384 x embed_dim).
+
+    HF transformer naming has varied across versions: try a few common
+    attribute paths and return the first one that yields a 2-D tensor
+    of the expected shape.
+    """
+    candidates = [
+        ("quantize", "embedding", "weight"),
+        ("quantize", "codebook"),
+        ("quantize", "embeddings", "weight"),
+        ("quantize", "codebook", "weight"),
+        ("vector_quantizer", "embedding", "weight"),
+    ]
+    for path in candidates:
+        obj = vqmodel
+        ok = True
+        for part in path:
+            if not hasattr(obj, part):
+                ok = False
+                break
+            obj = getattr(obj, part)
+        if ok and torch.is_tensor(obj) and obj.dim() == 2:
+            return obj
+    # Last-ditch: scan named_parameters for something that looks like a codebook
+    n_emb = getattr(vqmodel.config, "num_embeddings", None)
+    for name, p in vqmodel.named_parameters():
+        if p.dim() == 2 and (n_emb is None or p.shape[0] == n_emb):
+            if "embed" in name.lower() or "codebook" in name.lower():
+                return p
+    raise RuntimeError(
+        "Could not locate the VQ codebook embedding tensor; "
+        "inspect vqmodel.named_parameters() and update _find_vq_codebook().")
+
+
+def generation_loss(base, processor, image, caption,
+                    recon_weight: float = 0.0):
+    """One text->image teacher-forced step.
+
+    Always computes CE on the predicted VQ token IDs (Janus' native objective).
+    If recon_weight > 0, additionally computes a reconstruction loss in the
+    codebook embedding space (Anole-style: see RECON_LOSS_WEIGHT comment).
+
+    Returns: (total_loss, ce_loss_item, recon_loss_item) where the two scalars
+    are detached floats for logging. total_loss has grad.
+    """
     inner = base.model
     device = base.device
     dtype = next(base.parameters()).dtype
@@ -136,12 +188,30 @@ def generation_loss(base, processor, image, caption):
     hidden = inner(inputs_embeds=inputs_embeds).last_hidden_state
     Lt = text_embeds.shape[1]
     img_hidden = hidden[:, Lt - 1:, :]
-    logits = inner.generation_head(img_hidden)
+    logits = inner.generation_head(img_hidden)              # (1, n_img, codebook)
 
-    return F.cross_entropy(
-        logits.reshape(-1, logits.shape[-1]).float(),
-        image_tokens.reshape(-1).long(),
-    )
+    logits_f = logits.float()
+    targets = image_tokens.reshape(-1).long()
+    ce = F.cross_entropy(logits_f.reshape(-1, logits_f.shape[-1]), targets)
+
+    if recon_weight > 0.0:
+        # Codebook lookup: (codebook_size, embed_dim).
+        # Cached on the base model so we resolve it only once per process.
+        codebook = getattr(base, "_cached_vq_codebook", None)
+        if codebook is None:
+            codebook = _find_vq_codebook(inner.vqmodel).detach()
+            base._cached_vq_codebook = codebook
+        codebook_f = codebook.to(logits_f.device, logits_f.dtype)
+
+        # Predicted distribution -> expected codebook embedding (differentiable)
+        probs = F.softmax(logits_f, dim=-1)                  # (1, n_img, codebook)
+        pred_embed   = probs @ codebook_f                    # (1, n_img, embed_dim)
+        target_embed = codebook_f[targets].view(*pred_embed.shape)
+        recon = F.mse_loss(pred_embed, target_embed)
+        total = ce + recon_weight * recon
+        return total, ce.detach().item(), recon.detach().item()
+
+    return ce, ce.detach().item(), 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +291,7 @@ def main():
     print(f"  TRAIN_N={TRAIN_N} EVAL_N={EVAL_N} GEN_EVAL_N={GEN_EVAL_N}")
     print(f"  EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} weight_decay={WEIGHT_DECAY}")
     print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
+    print(f"  recon_loss_weight={RECON_LOSS_WEIGHT}  (0 = plain CE, Anole uses ~0.5)")
     print(f"  eval_every_steps={EVAL_EVERY_STEPS} eval_mid_n={EVAL_MID_N}")
     print(SEP + "\n")
 
@@ -248,6 +319,8 @@ def main():
         "grad_clip": GRAD_CLIP, "lora_rank": LORA_RANK,
         "lora_alpha": LORA_ALPHA, "seed": SEED,
         "schedule": "linear_warmup_cosine",
+        "recon_loss_weight": RECON_LOSS_WEIGHT,
+        "loss_type": "ce+recon" if RECON_LOSS_WEIGHT > 0 else "ce",
     })
 
     # AdamW + cosine schedule with linear warmup.
@@ -281,12 +354,16 @@ def main():
     for epoch in range(start_epoch, EPOCHS):
         order = train_ids[:]
         rng.shuffle(order)
-        running = 0.0
+        running, running_ce, running_recon = 0.0, 0.0, 0.0
         for i, img_id in enumerate(order):
             image = Image.open(VAL_IMAGES / id2file[img_id]).convert("RGB")
-            loss = generation_loss(base, processor, image, refs[img_id][0])
+            loss, ce_item, recon_item = generation_loss(
+                base, processor, image, refs[img_id][0],
+                recon_weight=RECON_LOSS_WEIGHT)
             (loss / GRAD_ACCUM).backward()
-            running += loss.item()
+            running       += loss.item()
+            running_ce    += ce_item
+            running_recon += recon_item
 
             if (i + 1) % GRAD_ACCUM == 0:
                 gnorm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
@@ -294,15 +371,23 @@ def main():
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
-                avg = running / GRAD_ACCUM
-                running = 0.0
+                avg       = running       / GRAD_ACCUM
+                avg_ce    = running_ce    / GRAD_ACCUM
+                avg_recon = running_recon / GRAD_ACCUM
+                running, running_ce, running_recon = 0.0, 0.0, 0.0
                 cur_lr = scheduler.get_last_lr()[0]
-                wandb.log({"train/loss": avg, "train/lr": cur_lr,
-                           "train/grad_norm": float(gnorm), "step": global_step})
+                wandb.log({"train/loss":       avg,
+                           "train/loss_ce":    avg_ce,
+                           "train/loss_recon": avg_recon,
+                           "train/lr":         cur_lr,
+                           "train/grad_norm":  float(gnorm),
+                           "step":             global_step})
                 if global_step % 20 == 0:
+                    extra = (f" ce={avg_ce:.4f} recon={avg_recon:.4f}"
+                             if RECON_LOSS_WEIGHT > 0 else "")
                     print(f"  epoch {epoch} step {global_step} "
-                          f"({i+1}/{len(order)}) loss={avg:.4f} lr={cur_lr:.2e}",
-                          flush=True)
+                          f"({i+1}/{len(order)}) loss={avg:.4f}{extra} "
+                          f"lr={cur_lr:.2e}", flush=True)
 
                 # Mid-epoch eval: cheap CLIPScore probe to see direction live.
                 if EVAL_EVERY_STEPS > 0 and global_step % EVAL_EVERY_STEPS == 0:

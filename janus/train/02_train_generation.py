@@ -308,6 +308,28 @@ def main():
     trainable = [p for p in base.parameters() if p.requires_grad]
     print(f"  trainable params: {sum(p.numel() for p in trainable)/1e6:.3f}M\n")
 
+    # Early sanity check: if the reconstruction loss is on, locate the VQ
+    # codebook NOW (right after model load) instead of at the first training
+    # step. This makes a configuration error fail in ~2 minutes instead of ~8.
+    if RECON_LOSS_WEIGHT > 0.0:
+        print("  Pre-flight: locating VQ codebook for reconstruction loss...",
+              flush=True)
+        try:
+            cb = _find_vq_codebook(base.model.vqmodel)
+            print(f"  Codebook OK -> shape={tuple(cb.shape)} dtype={cb.dtype}\n",
+                  flush=True)
+            base._cached_vq_codebook = cb.detach()
+        except Exception:
+            print("  Codebook lookup FAILED. Candidates that exist in vqmodel:",
+                  flush=True)
+            for name, p in base.model.vqmodel.named_parameters():
+                if p.dim() == 2 and ("emb" in name.lower()
+                                     or "codebook" in name.lower()
+                                     or "quant" in name.lower()):
+                    print(f"    {name}: shape={tuple(p.shape)} dtype={p.dtype}",
+                          flush=True)
+            raise
+
     train_ids, eval_ids, id2file, refs = load_split()
     print(f"  train images: {len(train_ids)} | eval images: {len(eval_ids)}\n")
 

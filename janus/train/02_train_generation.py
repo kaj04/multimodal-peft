@@ -66,6 +66,16 @@ LORA_RANK  = int(os.environ.get("LORA_RANK", "4"))     # captioning saturates at
 LORA_ALPHA = int(os.environ.get("LORA_ALPHA", str(2 * int(os.environ.get("LORA_RANK", "4")))))
 SEED       = int(os.environ.get("SEED", "42"))
 
+# Dataset source. "coco" (default) keeps the existing val2017 split workflow.
+# "pokemon" loads the 833-image lambdalabs/pokemon-blip-captions dataset from
+# HuggingFace as a narrow-target proof-of-concept (community standard for
+# LoRA-on-Stable-Diffusion benchmarks; we replicate the recipe on Janus).
+DATASET_SOURCE = os.environ.get("DATASET_SOURCE", "coco").lower()
+
+# LR schedule. Default cosine (what we've used until now). "constant" follows
+# the Janus paper recipe (constant LR with linear warmup, in all 3 stages).
+LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine").lower()
+
 # Loss design. Default = plain CE on VQ tokens (Janus' pretraining objective).
 # Setting RECON_LOSS_WEIGHT > 0 adds a reconstruction term on the VQ-VAE
 # codebook embedding space, following the recipe in the Anole blog
@@ -104,6 +114,9 @@ SEP = "=" * 64
 # ---------------------------------------------------------------------------
 
 def load_split():
+    """COCO val2017: returns (train_ids, eval_ids, id2file, refs).
+    id2file maps int id -> filename string (image opened lazily from disk).
+    refs   maps int id -> list of ~5 reference caption strings."""
     data = json.loads(VAL_CAPS.read_text())
     id2file = {im["id"]: im["file_name"] for im in data["images"]}
     refs = defaultdict(list)
@@ -114,6 +127,31 @@ def load_split():
     train_ids = ids[:TRAIN_N]
     eval_ids  = ids[TRAIN_N:TRAIN_N + EVAL_N]
     return train_ids, eval_ids, id2file, refs
+
+
+def load_pokemon_split():
+    """lambdalabs/pokemon-blip-captions: 833 image-caption pairs (a narrow,
+    visually coherent domain), used here as a proof-of-concept for
+    'low-data fine-tuning works on narrow targets'.
+
+    Returns the same tuple shape as load_split() so the rest of the trainer
+    is unchanged. id2img maps int id -> PIL.Image (already loaded in RAM;
+    the dataset is tiny, ~50MB)."""
+    from datasets import load_dataset
+    print("  loading lambdalabs/pokemon-blip-captions from HF...", flush=True)
+    ds = load_dataset("lambdalabs/pokemon-blip-captions", split="train")
+    id2img = {i: ds[i]["image"]               for i in range(len(ds))}
+    refs   = {i: [ds[i]["text"]]              for i in range(len(ds))}
+    ids = list(range(len(ds)))
+    random.Random(SEED).shuffle(ids)
+    # 833 samples is small: reserve ~80 for eval, use the rest for training
+    # (capped at TRAIN_N if the user wants an even smaller experiment).
+    n_eval  = min(EVAL_N, 80)
+    n_train = min(TRAIN_N, len(ids) - n_eval)
+    train_ids = ids[:n_train]
+    eval_ids  = ids[n_train:n_train + n_eval]
+    print(f"  pokemon split: train={n_train} eval={n_eval}", flush=True)
+    return train_ids, eval_ids, id2img, refs
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +320,8 @@ def eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, n):
 def main():
     import wandb
     from transformers import (JanusForConditionalGeneration, JanusProcessor,
-                              get_cosine_schedule_with_warmup)
+                              get_cosine_schedule_with_warmup,
+                              get_constant_schedule_with_warmup)
     from peft import LoraConfig, get_peft_model, TaskType
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -292,6 +331,7 @@ def main():
     print(f"  EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} weight_decay={WEIGHT_DECAY}")
     print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
     print(f"  recon_loss_weight={RECON_LOSS_WEIGHT}  (0 = plain CE, Anole uses ~0.5)")
+    print(f"  dataset_source={DATASET_SOURCE}  lr_schedule={LR_SCHEDULE}")
     print(f"  eval_every_steps={EVAL_EVERY_STEPS} eval_mid_n={EVAL_MID_N}")
     print(SEP + "\n")
 
@@ -330,7 +370,18 @@ def main():
                           flush=True)
             raise
 
-    train_ids, eval_ids, id2file, refs = load_split()
+    # Pick the data source. `id2src` is either a filename mapping (COCO, image
+    # loaded from disk per step) or a PIL.Image mapping (Pokemon, pre-loaded).
+    if DATASET_SOURCE == "pokemon":
+        train_ids, eval_ids, id2src, refs = load_pokemon_split()
+        def get_image(img_id):
+            return id2src[img_id].convert("RGB")
+    elif DATASET_SOURCE == "coco":
+        train_ids, eval_ids, id2src, refs = load_split()
+        def get_image(img_id):
+            return Image.open(VAL_IMAGES / id2src[img_id]).convert("RGB")
+    else:
+        raise ValueError(f"unknown DATASET_SOURCE={DATASET_SOURCE!r}")
     print(f"  train images: {len(train_ids)} | eval images: {len(eval_ids)}\n")
 
     scorer = CLIPScorer()
@@ -340,18 +391,25 @@ def main():
         "weight_decay": WEIGHT_DECAY, "warmup_ratio": WARMUP_RATIO,
         "grad_clip": GRAD_CLIP, "lora_rank": LORA_RANK,
         "lora_alpha": LORA_ALPHA, "seed": SEED,
-        "schedule": "linear_warmup_cosine",
+        "schedule": f"linear_warmup_{LR_SCHEDULE}",
         "recon_loss_weight": RECON_LOSS_WEIGHT,
         "loss_type": "ce+recon" if RECON_LOSS_WEIGHT > 0 else "ce",
+        "dataset_source": DATASET_SOURCE,
+        "lr_schedule": LR_SCHEDULE,
     })
 
-    # AdamW + cosine schedule with linear warmup.
-    # Total optimizer steps over the whole run determine the cosine length.
+    # AdamW + warmup + (cosine | constant) schedule.
+    # Total optimizer steps over the whole run determine the schedule length.
     total_steps  = (len(train_ids) // GRAD_ACCUM) * EPOCHS
     warmup_steps = max(1, int(WARMUP_RATIO * total_steps))
     print(f"  total optimizer steps: {total_steps}  warmup: {warmup_steps}\n", flush=True)
     optimizer = torch.optim.AdamW(trainable, lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+    if LR_SCHEDULE == "constant":
+        scheduler = get_constant_schedule_with_warmup(optimizer, warmup_steps)
+    elif LR_SCHEDULE == "cosine":
+        scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+    else:
+        raise ValueError(f"unknown LR_SCHEDULE={LR_SCHEDULE!r}")
 
     # Try to resume from a 'latest/' checkpoint in this RUN's OUTPUT_DIR.
     latest_dir = OUTPUT_DIR / "latest"
@@ -362,7 +420,7 @@ def main():
 
     if base_clip is None:
         print("  measuring baseline CLIPScore (pre-training)...", flush=True)
-        base_clip = eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, GEN_EVAL_N)
+        base_clip = eval_clipscore(base, processor, scorer, eval_ids, id2src, refs, GEN_EVAL_N)
         print(f"  baseline CLIPScore={base_clip:.2f}", flush=True)
         wandb.log({"eval/CLIPScore": base_clip, "epoch": 0})
         history = {"baseline_clipscore": base_clip, "epochs": []}
@@ -378,7 +436,7 @@ def main():
         rng.shuffle(order)
         running, running_ce, running_recon = 0.0, 0.0, 0.0
         for i, img_id in enumerate(order):
-            image = Image.open(VAL_IMAGES / id2file[img_id]).convert("RGB")
+            image = get_image(img_id)
             loss, ce_item, recon_item = generation_loss(
                 base, processor, image, refs[img_id][0],
                 recon_weight=RECON_LOSS_WEIGHT)
@@ -414,7 +472,7 @@ def main():
                 # Mid-epoch eval: cheap CLIPScore probe to see direction live.
                 if EVAL_EVERY_STEPS > 0 and global_step % EVAL_EVERY_STEPS == 0:
                     mid_clip = eval_clipscore(base, processor, scorer,
-                                              eval_ids, id2file, refs, EVAL_MID_N)
+                                              eval_ids, id2src, refs, EVAL_MID_N)
                     print(f"    [mid-eval @ step {global_step}] "
                           f"CLIPScore({EVAL_MID_N})={mid_clip:.2f}", flush=True)
                     wandb.log({"eval/CLIPScore_mid": mid_clip, "step": global_step})
@@ -425,7 +483,7 @@ def main():
                                     epoch, global_step, base_clip, history)
                     print(f"    saved checkpoint @ step {global_step}", flush=True)
 
-        clip = eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, GEN_EVAL_N)
+        clip = eval_clipscore(base, processor, scorer, eval_ids, id2src, refs, GEN_EVAL_N)
         print(f"  [epoch {epoch}] CLIPScore={clip:.2f}", flush=True)
         wandb.log({"eval/CLIPScore": clip, "epoch": epoch + 1})
         history["epochs"].append({"epoch": epoch + 1, "CLIPScore": clip})

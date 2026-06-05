@@ -67,10 +67,19 @@ LORA_ALPHA = int(os.environ.get("LORA_ALPHA", str(2 * int(os.environ.get("LORA_R
 SEED       = int(os.environ.get("SEED", "42"))
 
 # Dataset source. "coco" (default) keeps the existing val2017 split workflow.
-# "pokemon" loads the 833-image lambdalabs/pokemon-blip-captions dataset from
-# HuggingFace as a narrow-target proof-of-concept (community standard for
-# LoRA-on-Stable-Diffusion benchmarks; we replicate the recipe on Janus).
-DATASET_SOURCE = os.environ.get("DATASET_SOURCE", "coco").lower()
+# "hf" loads any image-caption dataset from HuggingFace as a narrow-target
+# proof-of-concept. The Pokemon BLIP captions dataset community-standard for
+# LoRA-on-Stable-Diffusion has been gated, so we default to the Naruto one
+# (same family, same {image, text} schema, public). Override HF_DATASET_NAME
+# to use any other dataset with the same column names.
+DATASET_SOURCE  = os.environ.get("DATASET_SOURCE", "coco").lower()
+HF_DATASET_NAME = os.environ.get("HF_DATASET_NAME",
+                                 "lambdalabs/naruto-blip-captions")
+HF_IMAGE_COL    = os.environ.get("HF_IMAGE_COL", "image")
+HF_TEXT_COL     = os.environ.get("HF_TEXT_COL", "text")
+# Back-compat: the old "pokemon" value still works as a synonym for hf.
+if DATASET_SOURCE == "pokemon":
+    DATASET_SOURCE = "hf"
 
 # LR schedule. Default cosine (what we've used until now). "constant" follows
 # the Janus paper recipe (constant LR with linear warmup, in all 3 stages).
@@ -129,28 +138,36 @@ def load_split():
     return train_ids, eval_ids, id2file, refs
 
 
-def load_pokemon_split():
-    """lambdalabs/pokemon-blip-captions: 833 image-caption pairs (a narrow,
-    visually coherent domain), used here as a proof-of-concept for
-    'low-data fine-tuning works on narrow targets'.
+def load_hf_image_caption_split():
+    """Load any small image+caption HF dataset (narrow-target proof-of-concept).
+
+    Default is lambdalabs/naruto-blip-captions (~1.2k pairs, public, same
+    schema as the gated pokemon variant). Override with HF_DATASET_NAME /
+    HF_IMAGE_COL / HF_TEXT_COL env vars.
 
     Returns the same tuple shape as load_split() so the rest of the trainer
     is unchanged. id2img maps int id -> PIL.Image (already loaded in RAM;
-    the dataset is tiny, ~50MB)."""
+    these datasets are tiny, tens of MB)."""
     from datasets import load_dataset
-    print("  loading lambdalabs/pokemon-blip-captions from HF...", flush=True)
-    ds = load_dataset("lambdalabs/pokemon-blip-captions", split="train")
-    id2img = {i: ds[i]["image"]               for i in range(len(ds))}
-    refs   = {i: [ds[i]["text"]]              for i in range(len(ds))}
+    print(f"  loading {HF_DATASET_NAME} from HF "
+          f"(image_col={HF_IMAGE_COL!r}, text_col={HF_TEXT_COL!r})...", flush=True)
+    ds = load_dataset(HF_DATASET_NAME, split="train")
+    if HF_IMAGE_COL not in ds.column_names or HF_TEXT_COL not in ds.column_names:
+        raise ValueError(
+            f"dataset columns {ds.column_names!r} do not contain "
+            f"{HF_IMAGE_COL!r}/{HF_TEXT_COL!r}; "
+            f"override HF_IMAGE_COL and HF_TEXT_COL")
+    id2img = {i: ds[i][HF_IMAGE_COL] for i in range(len(ds))}
+    refs   = {i: [ds[i][HF_TEXT_COL]] for i in range(len(ds))}
     ids = list(range(len(ds)))
     random.Random(SEED).shuffle(ids)
-    # 833 samples is small: reserve ~80 for eval, use the rest for training
-    # (capped at TRAIN_N if the user wants an even smaller experiment).
+    # Small dataset: reserve ~80 for eval, rest for training (capped at TRAIN_N).
     n_eval  = min(EVAL_N, 80)
     n_train = min(TRAIN_N, len(ids) - n_eval)
     train_ids = ids[:n_train]
     eval_ids  = ids[n_train:n_train + n_eval]
-    print(f"  pokemon split: train={n_train} eval={n_eval}", flush=True)
+    print(f"  hf split: train={n_train} eval={n_eval}  (total in dataset: {len(ds)})",
+          flush=True)
     return train_ids, eval_ids, id2img, refs
 
 
@@ -371,9 +388,9 @@ def main():
             raise
 
     # Pick the data source. `id2src` is either a filename mapping (COCO, image
-    # loaded from disk per step) or a PIL.Image mapping (Pokemon, pre-loaded).
-    if DATASET_SOURCE == "pokemon":
-        train_ids, eval_ids, id2src, refs = load_pokemon_split()
+    # loaded from disk per step) or a PIL.Image mapping (HF dataset, pre-loaded).
+    if DATASET_SOURCE == "hf":
+        train_ids, eval_ids, id2src, refs = load_hf_image_caption_split()
         def get_image(img_id):
             return id2src[img_id].convert("RGB")
     elif DATASET_SOURCE == "coco":

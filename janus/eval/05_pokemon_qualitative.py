@@ -58,17 +58,24 @@ OUTPUT_DIR = Path(os.environ.get(
 SEP = "=" * 64
 
 
+HF_DATASET_NAME = os.environ.get("HF_DATASET_NAME",
+                                 "lambdalabs/naruto-blip-captions")
+HF_TEXT_COL     = os.environ.get("HF_TEXT_COL", "text")
+
+
 def load_pokemon_eval_split():
-    """Re-derive the same held-out Pokemon eval split the trainer used."""
+    """Re-derive the SAME held-out eval split the trainer used. Defaults to the
+    naruto fallback; override HF_DATASET_NAME / HF_TEXT_COL to match the
+    trainer's choices."""
     from datasets import load_dataset
-    print(f"  loading lambdalabs/pokemon-blip-captions ...", flush=True)
-    ds = load_dataset("lambdalabs/pokemon-blip-captions", split="train")
+    print(f"  loading {HF_DATASET_NAME} (text_col={HF_TEXT_COL!r}) ...", flush=True)
+    ds = load_dataset(HF_DATASET_NAME, split="train")
     ids = list(range(len(ds)))
     random.Random(SEED).shuffle(ids)
     n_eval  = min(EVAL_N, 80)
     n_train = min(TRAIN_N, len(ids) - n_eval)
     eval_ids = ids[n_train:n_train + n_eval]
-    prompts = [ds[i]["text"] for i in eval_ids]
+    prompts = [ds[i][HF_TEXT_COL] for i in eval_ids]
     return prompts
 
 

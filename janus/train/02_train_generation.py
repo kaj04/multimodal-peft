@@ -85,6 +85,19 @@ if DATASET_SOURCE == "pokemon":
 # the Janus paper recipe (constant LR with linear warmup, in all 3 stages).
 LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine").lower()
 
+# Optional prefix prepended to every caption at training (hybrid prompt
+# templating). Idea: if every train caption is e.g. "anime sprite in Naruto
+# style, <BLIP caption>", the model learns the style is gated by the trigger
+# phrase. At inference, the same prefix re-activates the learned domain; users
+# can also drop it to compare. Empty string disables prefixing.
+CAPTION_PREFIX = os.environ.get("CAPTION_PREFIX", "")
+
+# AdamW betas. The Janus paper uses beta2=0.95 (default in transformers is 0.999).
+# Lower beta2 -> faster adaptation of the second-moment estimate, helps when
+# gradient variance is high (sparse CE signal over a 16k codebook).
+ADAM_BETA1 = float(os.environ.get("ADAM_BETA1", "0.9"))
+ADAM_BETA2 = float(os.environ.get("ADAM_BETA2", "0.95"))
+
 # Loss design. Default = plain CE on VQ tokens (Janus' pretraining objective).
 # Setting RECON_LOSS_WEIGHT > 0 adds a reconstruction term on the VQ-VAE
 # codebook embedding space, following the recipe in the Anole blog
@@ -318,14 +331,25 @@ def load_checkpoint_if_present(ckpt_dir, base, optimizer, scheduler):
     return s["epoch"], s["global_step"], s["base_clip"], s["history"]
 
 
+def _apply_prefix(caption: str) -> str:
+    """Prepend CAPTION_PREFIX if non-empty. Single place to enforce the rule."""
+    if CAPTION_PREFIX:
+        return CAPTION_PREFIX + caption
+    return caption
+
+
 @torch.no_grad()
 def eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, n):
+    """Mid-eval CLIPScore probe. Uses the prefixed caption for generation (to
+    match the training distribution) but scores against the RAW caption (so the
+    numeric metric stays comparable to the baseline)."""
     base.eval()
     vals = []
     for k, img_id in enumerate(eval_ids[:n]):
         torch.manual_seed(SEED + k)
-        img = generate_image(base, processor, refs[img_id][0])
-        vals.append(scorer.score(img, refs[img_id][0]))
+        raw = refs[img_id][0]
+        img = generate_image(base, processor, _apply_prefix(raw))
+        vals.append(scorer.score(img, raw))
     base.train()
     return float(np.mean(vals))
 
@@ -349,6 +373,8 @@ def main():
     print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
     print(f"  recon_loss_weight={RECON_LOSS_WEIGHT}  (0 = plain CE, Anole uses ~0.5)")
     print(f"  dataset_source={DATASET_SOURCE}  lr_schedule={LR_SCHEDULE}")
+    print(f"  caption_prefix={CAPTION_PREFIX!r}")
+    print(f"  adam_betas=({ADAM_BETA1}, {ADAM_BETA2})")
     print(f"  eval_every_steps={EVAL_EVERY_STEPS} eval_mid_n={EVAL_MID_N}")
     print(SEP + "\n")
 
@@ -420,7 +446,8 @@ def main():
     total_steps  = (len(train_ids) // GRAD_ACCUM) * EPOCHS
     warmup_steps = max(1, int(WARMUP_RATIO * total_steps))
     print(f"  total optimizer steps: {total_steps}  warmup: {warmup_steps}\n", flush=True)
-    optimizer = torch.optim.AdamW(trainable, lr=LR, weight_decay=WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(trainable, lr=LR, weight_decay=WEIGHT_DECAY,
+                                  betas=(ADAM_BETA1, ADAM_BETA2))
     if LR_SCHEDULE == "constant":
         scheduler = get_constant_schedule_with_warmup(optimizer, warmup_steps)
     elif LR_SCHEDULE == "cosine":
@@ -455,7 +482,7 @@ def main():
         for i, img_id in enumerate(order):
             image = get_image(img_id)
             loss, ce_item, recon_item = generation_loss(
-                base, processor, image, refs[img_id][0],
+                base, processor, image, _apply_prefix(refs[img_id][0]),
                 recon_weight=RECON_LOSS_WEIGHT)
             (loss / GRAD_ACCUM).backward()
             running       += loss.item()

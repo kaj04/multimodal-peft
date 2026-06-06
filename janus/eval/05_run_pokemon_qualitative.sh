@@ -1,21 +1,23 @@
 #!/bin/bash
-#SBATCH --job-name=pokemon_qual
-#SBATCH --partition=gpu_a100
-#SBATCH --gres=gpu:1
-#SBATCH --mem=40G
-#SBATCH --time=00:45:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/pokemon_qual/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/pokemon_qual/slurm_%j.err
+#SBATCH --job-name=naruto_qual
+#SBATCH --partition=gpu_h100
+#SBATCH --gres=gpu:h100:1
+#SBATCH --mem=80G
+#SBATCH --time=01:30:00
+#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/naruto_qual_7b/slurm_%j.out
+#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/naruto_qual_7b/slurm_%j.err
 #SBATCH --export=ALL
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/pokemon_qual
+mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/naruto_qual_7b
 
 echo "================================================================"
-echo "  Pokemon qualitative comparison"
+echo "  Naruto qualitative (2x2 prefix x adapter) comparison"
 echo "  Started: $(date)"
-echo "  ADAPTER     = ${ADAPTER:-<default=last pokemon adapter>}"
-echo "  N_PROMPTS   = ${N_PROMPTS:-<default=20>}"
-echo "  N_SAVE      = ${N_SAVE:-<default=10>}"
+echo "  MODEL_ID       = ${MODEL_ID:-<default=Janus-Pro-1B>}"
+echo "  ADAPTER        = ${ADAPTER:-<default>}"
+echo "  CAPTION_PREFIX = ${CAPTION_PREFIX:-<default>}"
+echo "  N_EVAL_BASE    = ${N_EVAL_BASE:-5}"
+echo "  N_HUMAN_BASE   = ${N_HUMAN_BASE:-5}"
 echo "================================================================"
 
 module load 2023
@@ -33,5 +35,5 @@ $JANUS_PY ~/multimodal-peft/janus/eval/05_pokemon_qualitative.py
 echo ""
 echo "================================================================"
 echo "  Done: $(date)"
-echo "  Output: ~/multimodal-peft/janus/tests/output/pokemon_qual/"
+echo "  Output: ~/multimodal-peft/janus/tests/output/naruto_qual_7b/"
 echo "================================================================"

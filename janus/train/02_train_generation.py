@@ -339,6 +339,25 @@ def _apply_prefix(caption: str) -> str:
 
 
 @torch.no_grad()
+def eval_loss(base, processor, eval_ids, get_image, refs, n):
+    """Held-out validation CE on n eval pairs (teacher-forced, no generation).
+    Cheap: ~30s for n=80 on H100 because we skip the autoregressive decoding
+    step entirely. Logs to W&B as val/CE_loss every epoch -> a real curve we
+    can use to spot overfitting (unlike CLIPScore which is OOD-unfaithful on
+    stylised domains like Naruto)."""
+    base.eval()
+    losses = []
+    for img_id in eval_ids[:n]:
+        image = get_image(img_id)
+        loss, ce, _ = generation_loss(base, processor, image,
+                                      _apply_prefix(refs[img_id][0]),
+                                      recon_weight=0.0)
+        losses.append(ce)
+    base.train()
+    return float(np.mean(losses))
+
+
+@torch.no_grad()
 def eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, n):
     """Mid-eval CLIPScore probe. Uses the prefixed caption for generation (to
     match the training distribution) but scores against the RAW caption (so the
@@ -528,9 +547,15 @@ def main():
                     print(f"    saved checkpoint @ step {global_step}", flush=True)
 
         clip = eval_clipscore(base, processor, scorer, eval_ids, id2src, refs, GEN_EVAL_N)
-        print(f"  [epoch {epoch}] CLIPScore={clip:.2f}", flush=True)
-        wandb.log({"eval/CLIPScore": clip, "epoch": epoch + 1})
-        history["epochs"].append({"epoch": epoch + 1, "CLIPScore": clip})
+        val_ce = eval_loss(base, processor, eval_ids, get_image, refs, EVAL_N)
+        print(f"  [epoch {epoch}] CLIPScore={clip:.2f}  val_CE={val_ce:.4f}",
+              flush=True)
+        wandb.log({"eval/CLIPScore": clip,
+                   "val/CE_loss":   val_ce,
+                   "epoch":         epoch + 1})
+        history["epochs"].append({"epoch": epoch + 1,
+                                  "CLIPScore": clip,
+                                  "val_CE": val_ce})
 
         # Two checkpoints per epoch: a permanent per-epoch adapter (for later
         # forgetting eval / matrix rows), and a 'latest' full state for resume.

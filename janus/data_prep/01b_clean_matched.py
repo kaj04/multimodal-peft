@@ -117,6 +117,40 @@ BLACKLIST_TITLE = [
 ]
 
 # ---------------------------------------------------------------------------
+# DROP_TITLES: exact-title manual blocklist for FPs that survive both the
+# blacklist substrings and the bio regex. Auditing the round-2 output revealed
+# a handful of cases where the FP is too idiosyncratic to be captured by a
+# rule without risking damaging true positives. Listing them by name is the
+# clean solution: explicit, auditable, zero side effects.
+# ---------------------------------------------------------------------------
+DROP_TITLES = {
+    # Temples in Naruto city (same FP family as Gokuraku-ji which the
+    # blacklist already catches; these two slip through because their names
+    # are too different to share a substring).
+    "Ryōzen-ji (Naruto)",
+    "Ryozen-ji (Naruto)",
+    "Tōrin-in (Naruto)",
+    "Torin-in (Naruto)",
+    # 1960s ninja film series + 2017 historical-novel film, all unrelated
+    # to the Kishimoto franchise.
+    "Shinobi no Kuni",
+    "Shinobi no Mono",
+    # Japanese chivalric order, predates the franchise.
+    "Order of Musashi Shinobi Samurai",
+    # Light-novel author of KonoSuba (name collision with Akatsuki keyword).
+    "Natsume Akatsuki",
+    # The fish-cake (narutomaki) that gave the franchise its name; article is
+    # about the food.
+    "Narutomaki",
+    # American hip-hop / metal band.
+    "Shinobi Ninja",
+    # Japanese island; article is geography, not franchise.
+    "Ōge-jima",
+    "Oge-jima",
+}
+
+
+# ---------------------------------------------------------------------------
 # Anti-bio lead phrases: if the lead matches AND the title is not unambiguous,
 # drop it (catches voice actors / wrestlers / singers / etc.).
 # ---------------------------------------------------------------------------
@@ -171,6 +205,11 @@ def main():
             row = json.loads(line)
             title = row["title"]
             text  = row["text"]
+
+            # Manual exact-title drop takes precedence over everything else.
+            if title in DROP_TITLES:
+                dropped.append((title, "manual_drop"))
+                continue
 
             if is_whitelisted(title):
                 kept.append(row)

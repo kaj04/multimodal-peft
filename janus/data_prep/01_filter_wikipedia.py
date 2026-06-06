@@ -35,7 +35,7 @@ OUT_DIR = Path(os.environ.get(
 MATCHED_TARGET = int(os.environ.get("MATCHED_TARGET", "150"))
 NEAR_TARGET    = int(os.environ.get("NEAR_TARGET",    "2000"))
 FAR_TARGET     = int(os.environ.get("FAR_TARGET",     "5000"))
-MAX_CHECKED    = int(os.environ.get("MAX_CHECKED", "1500000"))
+MAX_CHECKED    = int(os.environ.get("MAX_CHECKED", "7000000"))
 
 # Skip articles shorter than this (too short to be useful for LM)
 MIN_TEXT_CHARS = int(os.environ.get("MIN_TEXT_CHARS", "500"))
@@ -98,23 +98,48 @@ PHYSICS_LEAD_RE = _make_pattern([
 
 def classify(title: str, text: str):
     """Return one of 'matched', 'near', 'far', or None.
-    Articles can only land in ONE bucket -- matched wins over near wins over far."""
-    t_lc = title.lower()
-    lead = text[:1500]
+    Articles can only land in ONE bucket -- matched wins over near wins over far.
 
-    # MATCHED -- Naruto franchise
-    if NARUTO_TITLE_RE.search(title) and NARUTO_BROAD_RE.search(lead):
-        return "matched"
-    # Even if not in title, check if lead is clearly about Naruto.
-    if NARUTO_BROAD_RE.search(lead) and (" Naruto" in lead or "Naruto " in lead):
-        # Avoid false positives like articles where "Naruto" appears once in passing
-        if lead.lower().count("naruto") >= 2:
+    The matched classifier is intentionally strict: we want articles ABOUT the
+    Naruto franchise (characters, jutsu, locations, the series itself), not
+    articles that merely mention Naruto in passing (voice actor bios, cast
+    lists, manga publisher histories). False positives there would dilute the
+    'matched domain' signal we want to measure."""
+    t_lc = title.lower()
+    text_lc = text.lower()
+    lead = text[:2000]
+    lead_lc = lead.lower()
+
+    # Anti-false-positive: occupation/list patterns that mention Naruto but are
+    # not about it (e.g. "X is a Japanese voice actor", "List of anime by Y")
+    BIO_TERMS = ("voice actor", "voice actress", "mangaka",
+                 "japanese actor", "japanese actress", "japanese singer",
+                 "is an animator", "is a producer",
+                 "list of", "discography")
+    is_bio_or_list = any(b in lead_lc[:400] for b in BIO_TERMS)
+
+    # MATCHED rule 1 (strongest): the title itself is Naruto-specific.
+    # This catches "Naruto (manga)", "Naruto Uzumaki", "Sasuke Uchiha",
+    # "Sharingan", "List of Naruto characters", etc.
+    if NARUTO_TITLE_RE.search(title):
+        # Even with Naruto title, require some lead corroboration
+        if NARUTO_BROAD_RE.search(lead):
             return "matched"
 
+    # MATCHED rule 2: title is not Naruto-named but the article is clearly
+    # ABOUT the franchise. Require:
+    #   - at least 4 "naruto" mentions in the full text (article subject), AND
+    #   - "Naruto" appears in the very first sentence (lead 250 chars), AND
+    #   - the article is NOT a bio/list (anti-false-positive)
+    if (text_lc.count("naruto") >= 4
+        and "naruto" in lead_lc[:250]
+        and not is_bio_or_list):
+        return "matched"
+
     # NEAR -- other anime/manga (exclude Naruto-related to keep disjoint)
-    if ANIME_TITLE_RE.search(title):
-        # Make sure it's not Naruto-themed
-        if not NARUTO_TITLE_RE.search(title):
+    if ANIME_TITLE_RE.search(title) and not NARUTO_TITLE_RE.search(title):
+        # Also exclude if the article body is mostly about Naruto
+        if text_lc.count("naruto") < 4:
             return "near"
 
     # FAR -- physics / mathematics

@@ -74,20 +74,29 @@ BLACKLIST_TITLE = [
     "Japanese destroyer",
     "Japanese ship",
     "Japanese cruiser",
-    # Other Naruto-city geography
+    # Other Naruto-city geography (round 2: also Kaikyo Bridge, Expressway,
+    # Itano Kofun Cluster -- ancient burial mounds, Gokuraku-ji -- temple)
     "Onaruto Bridge",
     "Ōnaruto Bridge",
     "Naruto Bridge",
     "Naruto Strait",
     "Naruto Whirlpools",
     "Naruto, Tokushima",
+    "Kaikyo Bridge",
+    "Expressway",
+    "Kofun Cluster",
+    "Gokuraku-ji",
     # Stadiums
     "Stadium",
     # Sumo and unrelated bios
     " stable (",          # sumo stables: "Tagonoura stable (2013)"
     "Takanosato",
-    # Polish surname Narutowicz (Gabriel/Joanna Narutowicz)
+    "Kōtetsuyama",        # sumo wrestler whose bio mentions Akatsuki
+    "Kotetsuyama",
+    # Polish surname Narutowicz (Gabriel/Joanna + Polish presidential pages)
     "Narutowicz",
+    "Polish presidential",
+    "Plac Narutowicza",
     # Sega 'Shinobi' games unrelated to the franchise
     "Shadow Dancer",
     "G.G. Shinobi",
@@ -99,6 +108,8 @@ BLACKLIST_TITLE = [
     "Shinobi Tabi",
     "Akatsuki (train)",
     "Akatsuki/",
+    "Hichō",              # "Naruto Hichō (1977 TV series)" -- unrelated period drama
+    "Hicho",
     # WWII history
     "prisoner-of-war camp",
     # Disambiguation pages: keep franchise-specific ones, drop generic
@@ -110,11 +121,21 @@ BLACKLIST_TITLE = [
 # drop it (catches voice actors / wrestlers / singers / etc.).
 # ---------------------------------------------------------------------------
 BIO_LEAD_PATTERNS = [
-    re.compile(r"\bis a (japanese|american) voice actor", re.I),
-    re.compile(r"\bis a (japanese|american) voice actress", re.I),
-    re.compile(r"\bis a japanese (singer|musician|actor|actress|wrestler|sumo|footballer)", re.I),
-    re.compile(r"\bis a (former )?sumo wrestler", re.I),
-    re.compile(r"\bis a polish (politician|writer)", re.I),
+    # Voice actors / voice directors / casting directors (round 2: directors too)
+    re.compile(r"\bis a(n)? (japanese|american|british) voice actor", re.I),
+    re.compile(r"\bis a(n)? (japanese|american|british) voice actress", re.I),
+    re.compile(r"\bis a(n)? (japanese|american|british)? ?voice director", re.I),
+    re.compile(r"\bis a(n)? (japanese|american|british)? ?casting director", re.I),
+    # Singers / musicians / wrestlers / footballers
+    re.compile(r"\bis a(n)? japanese (singer|musician|actor|actress|wrestler|sumo|footballer)", re.I),
+    re.compile(r"\bis a(n)? american (singer|musician|actor|actress)", re.I),
+    re.compile(r"\bis a(n)? (former )?sumo wrestler", re.I),
+    re.compile(r"\bwas a (former )?sumo wrestler", re.I),
+    # Politicians (Narutowicz Polish president and similar)
+    re.compile(r"\bwas a(n)? polish (politician|president|writer)", re.I),
+    re.compile(r"\bis a(n)? polish (politician|writer)", re.I),
+    # Generic: "X (born YYYY) is a Japanese ..." -- catches many remaining bios
+    re.compile(r"\(born [12]\d{3}[^)]*\)\s+is a", re.I),
 ]
 
 

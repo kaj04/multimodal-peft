@@ -98,6 +98,21 @@ CAPTION_PREFIX = os.environ.get("CAPTION_PREFIX", "")
 ADAM_BETA1 = float(os.environ.get("ADAM_BETA1", "0.9"))
 ADAM_BETA2 = float(os.environ.get("ADAM_BETA2", "0.95"))
 
+# LoRA target modules. Default is attention-only (q,k,v,o), the recipe used
+# until v1. v2-CAPACITY adds the MLP projections (gate/up/down) to give the
+# adapter ~3x more trainable params -- needed on 7B to match the trainable-
+# parameter RATIO of the 1B baseline (0.44%) which our v1 7B run severely
+# underprovisioned at 0.13%.
+TARGET_MODULES = os.environ.get(
+    "TARGET_MODULES", "q_proj,k_proj,v_proj,o_proj").split(",")
+
+# Periodic image samples saved to disk during training. Lightweight (a handful
+# of fixed prompts) so we can SEE the model evolve epoch-by-epoch in the
+# samples/ folder, instead of only at the final eval. Default 200 steps =
+# typically 2-3 times per epoch.
+SAMPLE_EVERY_STEPS = int(os.environ.get("SAMPLE_EVERY_STEPS", "200"))
+N_SAMPLE_PROMPTS   = int(os.environ.get("N_SAMPLE_PROMPTS", "4"))
+
 # Loss design. Default = plain CE on VQ tokens (Janus' pretraining objective).
 # Setting RECON_LOSS_WEIGHT > 0 adds a reconstruction term on the VQ-VAE
 # codebook embedding space, following the recipe in the Anole blog
@@ -338,6 +353,35 @@ def _apply_prefix(caption: str) -> str:
     return caption
 
 
+# Fixed sampling prompts for the periodic sample dumps. Mix of WITH-prefix
+# (test in-distribution) and WITHOUT-prefix (test if the adapter "activates"
+# the learned style even without the trigger phrase). Hardcoded so the dumps
+# are directly comparable across steps and across runs.
+_FIXED_SAMPLE_PROMPTS = [
+    ("with_prefix",  "anime sprite in Naruto style, a young man with blonde spiky hair"),
+    ("with_prefix",  "anime sprite in Naruto style, a ninja jumping between rooftops"),
+    ("no_prefix",    "a young man with blonde spiky hair"),
+    ("no_prefix",    "a samurai warrior holding a katana"),
+]
+
+
+@torch.no_grad()
+def save_periodic_samples(base, processor, out_root, global_step, n_prompts):
+    """Generate a few fixed-prompt samples and save them as PNGs under
+    samples/step_XXXXXX/. Lightweight: ~10 seconds per call on H100 for n=4.
+    Provides a per-checkpoint visual trace of how the model evolves during
+    training, complementary to numeric loss curves."""
+    out_dir = out_root / "samples" / f"step_{global_step:06d}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base.eval()
+    for k, (tag, prompt) in enumerate(_FIXED_SAMPLE_PROMPTS[:n_prompts]):
+        torch.manual_seed(SEED + k)
+        img = generate_image(base, processor, prompt)
+        # Filename includes the tag so it's obvious at a glance which is which
+        img.save(out_dir / f"{k:02d}_{tag}.png")
+    base.train()
+
+
 @torch.no_grad()
 def eval_loss(base, processor, eval_ids, get_image, refs, n):
     """Held-out validation CE on n eval pairs (teacher-forced, no generation).
@@ -402,13 +446,19 @@ def main():
         MODEL_ID, torch_dtype=torch.bfloat16).to(
         "cuda" if torch.cuda.is_available() else "cpu")
     lora_cfg = LoraConfig(r=LORA_RANK, lora_alpha=LORA_ALPHA,
-                          target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+                          target_modules=TARGET_MODULES,
                           lora_dropout=0.05, bias="none", task_type=TaskType.CAUSAL_LM)
     # Inject in-place: keep `base` for the custom forward, `peft_model` to save.
     peft_model = get_peft_model(base, lora_cfg)
     base.train()
     trainable = [p for p in base.parameters() if p.requires_grad]
-    print(f"  trainable params: {sum(p.numel() for p in trainable)/1e6:.3f}M\n")
+    total_params = sum(p.numel() for p in base.parameters())
+    trainable_params = sum(p.numel() for p in trainable)
+    ratio_pct = 100.0 * trainable_params / total_params
+    print(f"  target_modules : {TARGET_MODULES}")
+    print(f"  trainable params: {trainable_params/1e6:.3f}M  /  total {total_params/1e6:.1f}M")
+    print(f"  trainable ratio: {ratio_pct:.3f}%  "
+          f"(1B@r=8 was ~0.44%; aim for >=0.4% on 7B too)\n", flush=True)
 
     # Early sanity check: if the reconstruction loss is on, locate the VQ
     # codebook NOW (right after model load) instead of at the first training
@@ -545,6 +595,12 @@ def main():
                     save_checkpoint(latest_dir, peft_model, optimizer, scheduler,
                                     epoch, global_step, base_clip, history)
                     print(f"    saved checkpoint @ step {global_step}", flush=True)
+
+                # Periodic image samples on fixed prompts (visual trace).
+                if SAMPLE_EVERY_STEPS > 0 and global_step % SAMPLE_EVERY_STEPS == 0:
+                    save_periodic_samples(base, processor, OUTPUT_DIR,
+                                          global_step, N_SAMPLE_PROMPTS)
+                    print(f"    saved samples @ step {global_step}", flush=True)
 
         clip = eval_clipscore(base, processor, scorer, eval_ids, id2src, refs, GEN_EVAL_N)
         val_ce = eval_loss(base, processor, eval_ids, get_image, refs, EVAL_N)

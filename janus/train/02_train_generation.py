@@ -121,6 +121,14 @@ N_SAMPLE_PROMPTS   = int(os.environ.get("N_SAMPLE_PROMPTS", "4"))
 #                                            codebook[target_tokens])
 RECON_LOSS_WEIGHT = float(os.environ.get("RECON_LOSS_WEIGHT", "0.0"))
 
+# KL-to-base regularizer weight. KL_LAMBDA > 0 adds
+#     lambda * KL(p_adapter || p_base)
+# averaged over image-token positions, with p_base from a no-grad forward of
+# the model with the adapter disabled. Targets the "the adapter is destroying
+# capability the base already had" failure mode (v1 7B diagnostic). Lambda
+# in [0.1, 1.0] is a sensible starting range -- start with 0.5.
+KL_LAMBDA = float(os.environ.get("KL_LAMBDA", "0.0"))
+
 # LR schedule + optimisation
 WARMUP_RATIO  = float(os.environ.get("WARMUP_RATIO", "0.05"))   # 5% linear warmup
 WEIGHT_DECAY  = float(os.environ.get("WEIGHT_DECAY", "0.0"))    # 0 on LoRA is standard
@@ -239,15 +247,30 @@ def _find_vq_codebook(vqmodel):
 
 
 def generation_loss(base, processor, image, caption,
-                    recon_weight: float = 0.0):
+                    recon_weight: float = 0.0,
+                    kl_weight: float = 0.0,
+                    peft_model=None):
     """One text->image teacher-forced step.
 
     Always computes CE on the predicted VQ token IDs (Janus' native objective).
-    If recon_weight > 0, additionally computes a reconstruction loss in the
-    codebook embedding space (Anole-style: see RECON_LOSS_WEIGHT comment).
+    Optionally adds two regularizers:
 
-    Returns: (total_loss, ce_loss_item, recon_loss_item) where the two scalars
-    are detached floats for logging. total_loss has grad.
+    1) recon_weight > 0  -- Anole-style reconstruction loss on codebook
+       embeddings. Softens the CE label (a "wrong" VQ id whose embedding is
+       close to the target's contributes less). Architecture-specific to VQ
+       models. See the original Anole blog for the recipe.
+
+    2) kl_weight > 0     -- KL(p_adapter || p_base) regularizer toward the
+       FROZEN base model's distribution on the same input. Requires
+       `peft_model` to call disable_adapter(). Inspired by the PPO/RLHF
+       policy-regularization term and by knowledge distillation. Diagnosed
+       use case: the base model already has competence we want to preserve
+       (so the adapter should *refine* rather than *overwrite*).
+       Cost: ~2x transformer forward (one with adapter, one without).
+
+    Returns: (total_loss, ce_item, recon_item, kl_item) -- the last three are
+    detached floats for logging. total_loss carries gradient through the
+    adapter (LoRA) parameters only.
     """
     inner = base.model
     device = base.device
@@ -264,12 +287,17 @@ def generation_loss(base, processor, image, caption,
     with torch.no_grad():
         image_tokens = inner.vqmodel.encode(pixel_values).image_tokens.reshape(1, -1)
 
+    # Embeddings: the input-embedding lookup and the image-embedding prep
+    # are NOT LoRA-targeted (LoRA covers q/k/v/o + optionally MLP), so they
+    # produce the SAME tensor with adapter on or off. We compute them ONCE
+    # and reuse for both forwards if KL is active.
     text_embeds  = base.get_input_embeddings()(text_ids)
     image_embeds = base.prepare_embeddings_for_image_generation(image_tokens)
     inputs_embeds = torch.cat([text_embeds, image_embeds[:, :-1, :]], dim=1)
-
-    hidden = inner(inputs_embeds=inputs_embeds).last_hidden_state
     Lt = text_embeds.shape[1]
+
+    # --- Adapter forward (gradient flows here) ---
+    hidden = inner(inputs_embeds=inputs_embeds).last_hidden_state
     img_hidden = hidden[:, Lt - 1:, :]
     logits = inner.generation_head(img_hidden)              # (1, n_img, codebook)
 
@@ -277,24 +305,45 @@ def generation_loss(base, processor, image, caption,
     targets = image_tokens.reshape(-1).long()
     ce = F.cross_entropy(logits_f.reshape(-1, logits_f.shape[-1]), targets)
 
+    total = ce
+    recon_item, kl_item = 0.0, 0.0
+
+    # --- Optional recon (Anole-style codebook embedding MSE) ---
     if recon_weight > 0.0:
-        # Codebook lookup: (codebook_size, embed_dim).
-        # Cached on the base model so we resolve it only once per process.
         codebook = getattr(base, "_cached_vq_codebook", None)
         if codebook is None:
             codebook = _find_vq_codebook(inner.vqmodel).detach()
             base._cached_vq_codebook = codebook
         codebook_f = codebook.to(logits_f.device, logits_f.dtype)
-
-        # Predicted distribution -> expected codebook embedding (differentiable)
         probs = F.softmax(logits_f, dim=-1)                  # (1, n_img, codebook)
         pred_embed   = probs @ codebook_f                    # (1, n_img, embed_dim)
         target_embed = codebook_f[targets].view(*pred_embed.shape)
         recon = F.mse_loss(pred_embed, target_embed)
-        total = ce + recon_weight * recon
-        return total, ce.detach().item(), recon.detach().item()
+        total = total + recon_weight * recon
+        recon_item = recon.detach().item()
 
-    return ce, ce.detach().item(), 0.0
+    # --- Optional KL-to-base regularizer ---
+    # We replay the SAME transformer call with the LoRA adapter disabled
+    # (peft_model.disable_adapter() context manager) under no_grad, then
+    # compute per-position KL averaged over the image-token positions.
+    if kl_weight > 0.0 and peft_model is not None:
+        with peft_model.disable_adapter():
+            with torch.no_grad():
+                hidden_b = inner(inputs_embeds=inputs_embeds).last_hidden_state
+                img_hidden_b = hidden_b[:, Lt - 1:, :]
+                logits_b = inner.generation_head(img_hidden_b).float()
+
+        # KL(p_adapter || p_base) per position, then mean over positions.
+        # Implemented manually for clarity (the F.kl_div sign convention is
+        # easy to get wrong here).
+        log_p_a = F.log_softmax(logits_f, dim=-1)          # (1, n_img, V)
+        log_p_b = F.log_softmax(logits_b, dim=-1)
+        kl_per_pos = (log_p_a.exp() * (log_p_a - log_p_b)).sum(dim=-1)  # (1, n_img)
+        kl = kl_per_pos.mean()
+        total = total + kl_weight * kl
+        kl_item = kl.detach().item()
+
+    return total, ce.detach().item(), recon_item, kl_item
 
 
 # ---------------------------------------------------------------------------
@@ -393,9 +442,11 @@ def eval_loss(base, processor, eval_ids, get_image, refs, n):
     losses = []
     for img_id in eval_ids[:n]:
         image = get_image(img_id)
-        loss, ce, _ = generation_loss(base, processor, image,
-                                      _apply_prefix(refs[img_id][0]),
-                                      recon_weight=0.0)
+        # Eval CE only: no KL or recon during validation (we want a pure
+        # likelihood-style number to spot overfitting).
+        loss, ce, _, _ = generation_loss(base, processor, image,
+                                         _apply_prefix(refs[img_id][0]),
+                                         recon_weight=0.0, kl_weight=0.0)
         losses.append(ce)
     base.train()
     return float(np.mean(losses))
@@ -435,6 +486,8 @@ def main():
     print(f"  EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} weight_decay={WEIGHT_DECAY}")
     print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
     print(f"  recon_loss_weight={RECON_LOSS_WEIGHT}  (0 = plain CE, Anole uses ~0.5)")
+    print(f"  kl_lambda={KL_LAMBDA}  (0 = no KL reg; >0 enables KL(p_adapter || p_base) "
+          f"-> doubles transformer fwd cost)")
     print(f"  dataset_source={DATASET_SOURCE}  lr_schedule={LR_SCHEDULE}")
     print(f"  caption_prefix={CAPTION_PREFIX!r}")
     print(f"  adam_betas=({ADAM_BETA1}, {ADAM_BETA2})")
@@ -505,7 +558,12 @@ def main():
         "lora_alpha": LORA_ALPHA, "seed": SEED,
         "schedule": f"linear_warmup_{LR_SCHEDULE}",
         "recon_loss_weight": RECON_LOSS_WEIGHT,
-        "loss_type": "ce+recon" if RECON_LOSS_WEIGHT > 0 else "ce",
+        "kl_lambda":         KL_LAMBDA,
+        "loss_type": "+".join(
+            ["ce"]
+            + (["recon"] if RECON_LOSS_WEIGHT > 0 else [])
+            + (["kl"]    if KL_LAMBDA         > 0 else [])
+        ),
         "dataset_source": DATASET_SOURCE,
         "lr_schedule": LR_SCHEDULE,
     })
@@ -547,16 +605,19 @@ def main():
     for epoch in range(start_epoch, EPOCHS):
         order = train_ids[:]
         rng.shuffle(order)
-        running, running_ce, running_recon = 0.0, 0.0, 0.0
+        running, running_ce, running_recon, running_kl = 0.0, 0.0, 0.0, 0.0
         for i, img_id in enumerate(order):
             image = get_image(img_id)
-            loss, ce_item, recon_item = generation_loss(
+            loss, ce_item, recon_item, kl_item = generation_loss(
                 base, processor, image, _apply_prefix(refs[img_id][0]),
-                recon_weight=RECON_LOSS_WEIGHT)
+                recon_weight=RECON_LOSS_WEIGHT,
+                kl_weight=KL_LAMBDA,
+                peft_model=peft_model)
             (loss / GRAD_ACCUM).backward()
             running       += loss.item()
             running_ce    += ce_item
             running_recon += recon_item
+            running_kl    += kl_item
 
             if (i + 1) % GRAD_ACCUM == 0:
                 gnorm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
@@ -567,20 +628,24 @@ def main():
                 avg       = running       / GRAD_ACCUM
                 avg_ce    = running_ce    / GRAD_ACCUM
                 avg_recon = running_recon / GRAD_ACCUM
-                running, running_ce, running_recon = 0.0, 0.0, 0.0
+                avg_kl    = running_kl    / GRAD_ACCUM
+                running, running_ce, running_recon, running_kl = 0.0, 0.0, 0.0, 0.0
                 cur_lr = scheduler.get_last_lr()[0]
                 wandb.log({"train/loss":       avg,
                            "train/loss_ce":    avg_ce,
                            "train/loss_recon": avg_recon,
+                           "train/loss_kl":    avg_kl,
                            "train/lr":         cur_lr,
                            "train/grad_norm":  float(gnorm),
                            "step":             global_step})
                 if global_step % 20 == 0:
-                    extra = (f" ce={avg_ce:.4f} recon={avg_recon:.4f}"
-                             if RECON_LOSS_WEIGHT > 0 else "")
+                    extras = []
+                    if RECON_LOSS_WEIGHT > 0: extras.append(f"recon={avg_recon:.4f}")
+                    if KL_LAMBDA > 0:        extras.append(f"kl={avg_kl:.4f}")
+                    extra_str = (" " + " ".join(extras)) if extras else ""
                     print(f"  epoch {epoch} step {global_step} "
-                          f"({i+1}/{len(order)}) loss={avg:.4f}{extra} "
-                          f"lr={cur_lr:.2e}", flush=True)
+                          f"({i+1}/{len(order)}) loss={avg:.4f} ce={avg_ce:.4f}"
+                          f"{extra_str} lr={cur_lr:.2e}", flush=True)
 
                 # Mid-epoch eval: cheap CLIPScore probe to see direction live.
                 if EVAL_EVERY_STEPS > 0 and global_step % EVAL_EVERY_STEPS == 0:

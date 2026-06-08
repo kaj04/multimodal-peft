@@ -112,10 +112,10 @@ TARGET_MODULES = os.environ.get(
 
 # Periodic image samples saved to disk during training. Lightweight (a handful
 # of fixed prompts) so we can SEE the model evolve epoch-by-epoch in the
-# samples/ folder, instead of only at the final eval. Default 200 steps =
-# typically 2-3 times per epoch.
-SAMPLE_EVERY_STEPS = int(os.environ.get("SAMPLE_EVERY_STEPS", "200"))
-N_SAMPLE_PROMPTS   = int(os.environ.get("N_SAMPLE_PROMPTS", "4"))
+# samples/ folder + W&B media panel, instead of only at the final eval.
+# Default 100 steps = typically 5-6 times per epoch, ~10 sec each on H100.
+SAMPLE_EVERY_STEPS = int(os.environ.get("SAMPLE_EVERY_STEPS", "100"))
+N_SAMPLE_PROMPTS   = int(os.environ.get("N_SAMPLE_PROMPTS", "6"))
 
 # Loss design. Default = plain CE on VQ tokens (Janus' pretraining objective).
 # Setting RECON_LOSS_WEIGHT > 0 adds a reconstruction term on the VQ-VAE
@@ -411,10 +411,15 @@ def _apply_prefix(caption: str) -> str:
 # the learned style even without the trigger phrase). Hardcoded so the dumps
 # are directly comparable across steps and across runs.
 _FIXED_SAMPLE_PROMPTS = [
+    # In-distribution prefix prompts (test whether the adapter improves on
+    # the canonicals the base 7B already handles well)
     ("with_prefix",  "anime sprite in Naruto style, a young man with blonde spiky hair"),
     ("with_prefix",  "anime sprite in Naruto style, a ninja jumping between rooftops"),
+    ("with_prefix",  "anime sprite in Naruto style, a teenage girl with pink hair"),
+    # Natural prompts (test the gate problem: does the adapter fire without prefix?)
     ("no_prefix",    "a young man with blonde spiky hair"),
     ("no_prefix",    "a samurai warrior holding a katana"),
+    ("no_prefix",    "a wise old man with a long white beard"),
 ]
 
 

@@ -102,8 +102,8 @@ export EVAL_MID_N="10"
 export GEN_EVAL_N="20"
 export EVAL_N="80"
 export TRAIN_N="4000"
-export SAMPLE_EVERY_STEPS="200"
-export N_SAMPLE_PROMPTS="4"
+export SAMPLE_EVERY_STEPS="100"   # every 100 opt steps = ~6 visual snapshots per epoch
+export N_SAMPLE_PROMPTS="6"       # 3 with prefix + 3 without (gate problem probe)
 
 # Resume / checkpoint
 export RESUME="1"

@@ -219,7 +219,9 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
 
     Returns a single value (placed in 'delta' bucket, not before/after)."""
     try:
-        from art_fid import compute_art_fid
+        # The package's __init__.py is empty; compute_art_fid lives in the
+        # internal submodule art_fid.art_fid (not exposed at top level).
+        from art_fid.art_fid import compute_art_fid
     except ImportError as e:
         return {"value": None,
                 "error": f"art-fid module not importable: {e}"}

@@ -53,27 +53,26 @@ check_and_install cleanfid clean-fid
 check_and_install pyiqa
 
 # setuptools provides pkg_resources (a namespace package required by CLIP-IQA
-# inside pyiqa). --no-deps does NOT work here: pkg_resources is an internal
-# part of setuptools that only materialises with a proper full install.
-# We do --upgrade WITHOUT --no-deps; this can pull a newer setuptools but
-# does NOT touch numpy/scipy.
+# inside pyiqa). IMPORTANT: setuptools 81.0.0 (released Aug 2025) REMOVED
+# pkg_resources entirely. We must pin to setuptools<81. With setuptools 80.x,
+# pkg_resources is bundled (with a deprecation warning).
 if ! $JANUS_PY -c "import pkg_resources" 2>/dev/null; then
-    echo "  [deps] installing setuptools (--upgrade, full deps)"
-    $JANUS_PY -m pip install --quiet --upgrade setuptools 2>&1 | tail -3
+    echo "  [deps] installing setuptools<81 (pkg_resources removed in 81+)"
+    $JANUS_PY -m pip install --quiet --force-reinstall "setuptools<81" 2>&1 | tail -3
 else
     echo "  [deps] pkg_resources already present, skipping setuptools install"
 fi
 
 # ArtFID (paper 2207.12280): style-aware FID with Inception fine-tuned on
-# WikiArt, plus LPIPS for content preservation. Needs full deps (lpips, etc.)
-# to work -- --no-deps would leave lpips missing. We pre-pin numpy<2 so
-# art-fid's transitive deps don't try to install numpy>=2.
-if ! $JANUS_PY -c "import art_fid" 2>/dev/null; then
+# WikiArt + LPIPS for content preservation. The package's __init__.py is
+# empty; compute_art_fid lives in the art_fid.art_fid submodule. We test
+# the submodule import to confirm install success.
+if ! $JANUS_PY -c "from art_fid.art_fid import compute_art_fid" 2>/dev/null; then
     echo "  [deps] installing art-fid (full deps, numpy<2 pre-pinned)"
     $JANUS_PY -m pip install --quiet "numpy<2" 2>&1 | tail -3
     $JANUS_PY -m pip install --quiet "art-fid" 2>&1 | tail -3
 else
-    echo "  [deps] art_fid already present, skipping"
+    echo "  [deps] art_fid.compute_art_fid already present, skipping"
 fi
 
 $JANUS_PY ~/multimodal-peft/janus/eval/06_metrics_panel.py

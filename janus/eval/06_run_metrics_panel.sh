@@ -30,14 +30,27 @@ export HF_HOME=/scratch-shared/tesr125338/hf_cache
 
 JANUS_PY=$HOME/.conda/envs/janus/bin/python
 
-# Defensive deps install (idempotent; safe to run every time).
-# If you've already installed these once, pip skips. ~5 sec when cached.
-# NOTE: art-fid is intentionally NOT installed here -- it depends on numpy<2,
-# which conflicts with opencv-python>=4.13 and breaks the env. The metrics
-# script falls back gracefully and just skips ArtFID. We can compute ArtFID
-# in a SEPARATE follow-up job with a pinned numpy<2, on the already-generated
-# images saved to disk by this run.
-$JANUS_PY -m pip install --quiet clean-fid pyiqa scipy 2>&1 | tail -3
+# Dependency installs are NON-DESTRUCTIVE by design:
+#   - check first via the import name; install only if missing
+#   - --no-deps to avoid pip pulling/upgrading numpy/scipy/torch as transitive
+#     dependencies. This is what BROKE the conda env on Jun-7: pip install
+#     scipy upgraded numpy from 1.26 to 2.x, and a follow-up art-fid install
+#     downgraded numpy back to 1.x while scipy was already at the 2.x-built
+#     version -> Janus model imports started crashing across the env for hours.
+#   - art-fid is intentionally NOT installed here (its numpy<2 pin conflicts
+#     with opencv>=4.13 in this env). Run a separate job in an isolated venv
+#     if ArtFID is needed; the script's fallback path tolerates its absence.
+check_and_install () {
+    local mod="$1"; local pkg="${2:-$1}"
+    if ! $JANUS_PY -c "import ${mod}" 2>/dev/null; then
+        echo "  [deps] installing ${pkg} (--no-deps)"
+        $JANUS_PY -m pip install --quiet --no-deps "${pkg}" 2>&1 | tail -3
+    else
+        echo "  [deps] ${mod} already present, skipping"
+    fi
+}
+check_and_install cleanfid clean-fid
+check_and_install pyiqa
 
 $JANUS_PY ~/multimodal-peft/janus/eval/06_metrics_panel.py
 

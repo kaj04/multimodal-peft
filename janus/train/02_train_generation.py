@@ -416,18 +416,33 @@ _FIXED_SAMPLE_PROMPTS = [
 
 @torch.no_grad()
 def save_periodic_samples(base, processor, out_root, global_step, n_prompts):
-    """Generate a few fixed-prompt samples and save them as PNGs under
-    samples/step_XXXXXX/. Lightweight: ~10 seconds per call on H100 for n=4.
-    Provides a per-checkpoint visual trace of how the model evolves during
-    training, complementary to numeric loss curves."""
+    """Generate a few fixed-prompt samples and save them BOTH as PNGs on disk
+    AND as wandb.Image entries in the live W&B run. The on-disk dump gives us
+    a deterministic visual trace per checkpoint; the W&B log gives us a
+    scrollable in-browser view from anywhere without rsync. Lightweight:
+    ~10 seconds per call on H100 for n=4."""
     out_dir = out_root / "samples" / f"step_{global_step:06d}"
     out_dir.mkdir(parents=True, exist_ok=True)
     base.eval()
+    # Lazy-import wandb so the function works even if W&B isn't initialised
+    # (e.g. unit tests). The actual training run always inits it in main().
+    try:
+        import wandb as _wandb
+        wandb_active = _wandb.run is not None
+    except Exception:
+        _wandb = None
+        wandb_active = False
+    wandb_images = []
     for k, (tag, prompt) in enumerate(_FIXED_SAMPLE_PROMPTS[:n_prompts]):
         torch.manual_seed(SEED + k)
         img = generate_image(base, processor, prompt)
         # Filename includes the tag so it's obvious at a glance which is which
         img.save(out_dir / f"{k:02d}_{tag}.png")
+        if wandb_active:
+            wandb_images.append(_wandb.Image(img, caption=f"{k:02d}_{tag} :: {prompt}"))
+    if wandb_active and wandb_images:
+        # Logged as a Media panel; the W&B UI lets you scrub across steps
+        _wandb.log({"samples": wandb_images, "step": global_step})
     base.train()
 
 

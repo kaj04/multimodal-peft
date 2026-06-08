@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu_h100
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
-#SBATCH --time=02:00:00
+#SBATCH --time=05:00:00
 #SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/metrics_panel/slurm_%j.out
 #SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/metrics_panel/slurm_%j.err
 #SBATCH --export=ALL
@@ -32,11 +32,12 @@ JANUS_PY=$HOME/.conda/envs/janus/bin/python
 
 # Defensive deps install (idempotent; safe to run every time).
 # If you've already installed these once, pip skips. ~5 sec when cached.
+# NOTE: art-fid is intentionally NOT installed here -- it depends on numpy<2,
+# which conflicts with opencv-python>=4.13 and breaks the env. The metrics
+# script falls back gracefully and just skips ArtFID. We can compute ArtFID
+# in a SEPARATE follow-up job with a pinned numpy<2, on the already-generated
+# images saved to disk by this run.
 $JANUS_PY -m pip install --quiet clean-fid pyiqa scipy 2>&1 | tail -3
-# art-fid is optional: if it fails to install (it has tricky deps), the
-# metrics script falls back gracefully and just skips ArtFID.
-$JANUS_PY -m pip install --quiet art-fid 2>&1 | tail -3 || \
-    echo "  WARN: art-fid not installed; ArtFID will be skipped."
 
 $JANUS_PY ~/multimodal-peft/janus/eval/06_metrics_panel.py
 

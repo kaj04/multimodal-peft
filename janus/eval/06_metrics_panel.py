@@ -55,7 +55,14 @@ CAPTION_PREFIX = os.environ.get("CAPTION_PREFIX", "anime sprite in Naruto style,
 SEED      = int(os.environ.get("SEED", "42"))
 TRAIN_N   = int(os.environ.get("TRAIN_N", "4000"))
 EVAL_N    = int(os.environ.get("EVAL_N",  "80"))
-N_GEN     = int(os.environ.get("N_GEN",   "200"))   # how many to generate per condition
+# Default lowered to 80 because 7B generation is ~16 sec/image even on H100
+# -> 200 -> >2h just generation; 80 still well above the FID/CMMD reliability
+# threshold (~50 for stylised domains).
+N_GEN     = int(os.environ.get("N_GEN",   "80"))
+# If set to "1", skip the generation step and load before/after images from
+# disk under <out_dir>/generated/. Useful to rerun ONLY the metrics step
+# after a crash, without spending another hour on generation.
+REUSE_IMAGES = os.environ.get("REUSE_IMAGES", "0") == "1"
 
 HF_DATASET_NAME = os.environ.get("HF_DATASET_NAME",
                                  "lambdalabs/naruto-blip-captions")
@@ -311,16 +318,45 @@ def main():
     # with respect to training; the comparison is then "does the adapter make
     # in-distribution outputs better than the base?").
     gen_prompts_pref = [CAPTION_PREFIX + p for p in gen_prompts]
-    print(f"  generating {N_GEN} images BEFORE (adapter off)...", flush=True)
-    t0 = time.time()
-    before = generate_set(model, processor, gen_prompts_pref, with_adapter=False)
-    print(f"  {len(before)} generated in {(time.time()-t0)/60:.1f} min")
-    print(f"  generating {N_GEN} images AFTER  (adapter on)...", flush=True)
-    t0 = time.time()
-    after = generate_set(model, processor, gen_prompts_pref, with_adapter=True)
-    print(f"  {len(after)} generated in {(time.time()-t0)/60:.1f} min\n")
 
-    # Save a sample grid for sanity
+    # Generated images live under <out_dir>/generated/{before,after}. We save
+    # ALL of them to disk before any metric is computed, so a crash in the
+    # metrics phase doesn't waste the (~1h) generation work -- a rerun with
+    # REUSE_IMAGES=1 will pick them up from disk and skip generation.
+    gen_root = out_dir / "generated"
+    before_dir = gen_root / "before"
+    after_dir  = gen_root / "after"
+
+    if REUSE_IMAGES and before_dir.exists() and after_dir.exists():
+        print(f"  REUSE_IMAGES=1 -> loading from {gen_root}", flush=True)
+        before = [Image.open(p).convert("RGB")
+                  for p in sorted(before_dir.glob("*.png"))][:N_GEN]
+        after  = [Image.open(p).convert("RGB")
+                  for p in sorted(after_dir.glob("*.png"))][:N_GEN]
+        print(f"  loaded before={len(before)} after={len(after)}", flush=True)
+    else:
+        before_dir.mkdir(parents=True, exist_ok=True)
+        after_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"  generating {N_GEN} images BEFORE (adapter off)...", flush=True)
+        t0 = time.time()
+        before = generate_set(model, processor, gen_prompts_pref, with_adapter=False)
+        print(f"  {len(before)} generated in {(time.time()-t0)/60:.1f} min")
+        # Save BEFORE images immediately
+        for k, img in enumerate(before):
+            img.save(before_dir / f"{k:04d}.png")
+        print(f"  saved BEFORE images to {before_dir}", flush=True)
+
+        print(f"  generating {N_GEN} images AFTER  (adapter on)...", flush=True)
+        t0 = time.time()
+        after = generate_set(model, processor, gen_prompts_pref, with_adapter=True)
+        print(f"  {len(after)} generated in {(time.time()-t0)/60:.1f} min\n")
+        # Save AFTER images immediately
+        for k, img in enumerate(after):
+            img.save(after_dir / f"{k:04d}.png")
+        print(f"  saved AFTER images to {after_dir}\n", flush=True)
+
+    # Small sample grid for sanity (kept in addition to the full generated set).
     sample_dir = out_dir / "samples"
     sample_dir.mkdir(exist_ok=True)
     for k in range(min(10, len(before))):

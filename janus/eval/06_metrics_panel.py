@@ -236,6 +236,11 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
             # mode='art_fid_inf' is the package default: uses subsampling to
             # estimate the infinite-N ArtFID value, which is MORE robust on
             # small N (like our N=80) than the standard 'art_fid' mode.
+            # num_workers=0 (no DataLoader multiprocessing). num_workers>0
+            # triggers a 'Trying to resize storage that is not resizable'
+            # crash in torch's default_collate on this combination of
+            # torch version + art-fid Dataset shape. Single-process load
+            # adds ~30s of latency on N=80 -- negligible.
             score = compute_art_fid(
                 path_to_stylized=a,
                 path_to_style=b,
@@ -244,7 +249,7 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
                 device="cuda",
                 mode="art_fid_inf",
                 content_metric="lpips",
-                num_workers=2,
+                num_workers=0,
             )
             return {"value": float(score), "mode": "art_fid_inf"}
         except Exception as e:

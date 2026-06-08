@@ -104,8 +104,64 @@ def load_eval_split():
 # or dict; lazy-imports keep the import surface small).
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# CLIP helper: HF's CLIPModel.get_image_features() returns a TENSOR in
+# transformers <= ~4.45 but a BaseModelOutputWithPooling in some newer
+# versions. The .norm() call on the latter crashes (bug fixed via this
+# helper that handles both shapes).
+# ---------------------------------------------------------------------------
+
+def _clip_feats(clip, proc, imgs, device="cuda", batch=16):
+    """Robust CLIP image-feature extractor, L2-normalised. Returns CPU tensor
+    shape (N, D)."""
+    @torch.no_grad()
+    def _to_tensor(x):
+        if torch.is_tensor(x):
+            return x
+        # Try common ModelOutput attributes in order of preference
+        for attr in ("image_features", "pooler_output", "last_hidden_state"):
+            v = getattr(x, attr, None)
+            if torch.is_tensor(v):
+                # last_hidden_state is (B, L, D); take CLS
+                return v if v.dim() == 2 else v[:, 0]
+        raise RuntimeError(f"can't extract image feats from {type(x)}")
+
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(imgs), batch):
+            chunk = imgs[i:i + batch]
+            x = proc(images=chunk, return_tensors="pt").to(device)
+            f = _to_tensor(clip.get_image_features(**x))
+            f = f / f.norm(dim=-1, keepdim=True)
+            out.append(f.cpu())
+    return torch.cat(out, 0)
+
+
+def _clip_text_feats(clip, proc, texts, device="cuda"):
+    """Robust CLIP text-feature extractor, L2-normalised. Returns CPU tensor
+    shape (len(texts), D)."""
+    @torch.no_grad()
+    def _to_tensor(x):
+        if torch.is_tensor(x):
+            return x
+        for attr in ("text_features", "pooler_output", "last_hidden_state"):
+            v = getattr(x, attr, None)
+            if torch.is_tensor(v):
+                return v if v.dim() == 2 else v[:, 0]
+        raise RuntimeError(f"can't extract text feats from {type(x)}")
+
+    with torch.no_grad():
+        x = proc(text=list(texts), return_tensors="pt", padding=True).to(device)
+        f = _to_tensor(clip.get_text_features(**x))
+        f = f / f.norm(dim=-1, keepdim=True)
+    return f.cpu()
+
+
 def metric_fid(gen_imgs, ref_imgs):
-    """Standard FID via cleanfid (Parmar et al. 2022, robust impl)."""
+    """Standard FID via cleanfid (Parmar et al. 2022, robust impl).
+    On small N (~80) the Inception-feature covariance can be ill-conditioned
+    -> compute_fid raises 'imaginary component' from a complex matrix sqrt.
+    KID (metric_kid) is the robust fallback for this scenario."""
     try:
         from cleanfid import fid
     except ImportError:
@@ -114,8 +170,31 @@ def metric_fid(gen_imgs, ref_imgs):
     with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
         for i, img in enumerate(gen_imgs): img.save(f"{a}/{i:04d}.png")
         for i, img in enumerate(ref_imgs): img.save(f"{b}/{i:04d}.png")
-        score = fid.compute_fid(a, b, mode="clean", num_workers=2)
-    return {"value": float(score)}
+        try:
+            score = fid.compute_fid(a, b, mode="clean", num_workers=2)
+            return {"value": float(score)}
+        except Exception as e:
+            return {"value": None, "error": f"{type(e).__name__}: {e}"}
+
+
+def metric_kid(gen_imgs, ref_imgs):
+    """KID (Kernel Inception Distance, Binkowski et al. 2018). Unbiased
+    estimator of the squared MMD between Inception feature distributions.
+    No matrix sqrt -> numerically robust on small N where FID fails. Lower
+    is better. cleanfid implementation."""
+    try:
+        from cleanfid import fid
+    except ImportError:
+        return {"value": None, "error": "cleanfid not installed"}
+    import tempfile
+    with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+        for i, img in enumerate(gen_imgs): img.save(f"{a}/{i:04d}.png")
+        for i, img in enumerate(ref_imgs): img.save(f"{b}/{i:04d}.png")
+        try:
+            score = fid.compute_kid(a, b, mode="clean", num_workers=2)
+            return {"value": float(score)}
+        except Exception as e:
+            return {"value": None, "error": f"{type(e).__name__}: {e}"}
 
 
 def metric_artfid(gen_imgs, ref_imgs):
@@ -141,7 +220,8 @@ def metric_cmmd(gen_imgs, ref_imgs):
     """CMMD (Jayasumana et al. 2024, CVPR): MMD distance in CLIP feature
     space. Designed to fix FID's known issues on small N and on stylised
     domains. Implementation here uses CLIP ViT-L/14 features and the
-    Gaussian RBF kernel (sigma chosen by median heuristic)."""
+    Gaussian RBF kernel (sigma chosen by median heuristic). Uses the robust
+    _clip_feats helper to handle multiple transformers output shapes."""
     try:
         from transformers import CLIPModel, CLIPProcessor
     except ImportError:
@@ -150,19 +230,8 @@ def metric_cmmd(gen_imgs, ref_imgs):
     proc = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
     clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14").to("cuda").eval()
 
-    @torch.no_grad()
-    def feats(imgs):
-        out = []
-        for i in range(0, len(imgs), 16):
-            batch = imgs[i:i + 16]
-            x = proc(images=batch, return_tensors="pt").to("cuda")
-            f = clip.get_image_features(**x)
-            f = f / f.norm(dim=-1, keepdim=True)
-            out.append(f.cpu())
-        return torch.cat(out, 0)
-
-    x = feats(gen_imgs).numpy()
-    y = feats(ref_imgs).numpy()
+    x = _clip_feats(clip, proc, gen_imgs).numpy()
+    y = _clip_feats(clip, proc, ref_imgs).numpy()
     # Median-heuristic sigma
     from scipy.spatial.distance import pdist
     sigma = float(np.median(pdist(np.vstack([x, y])))) or 1.0
@@ -198,41 +267,25 @@ def metric_clip_dirsim(before_imgs, after_imgs,
     cosine similarity between the image-edit direction and the text-edit
     direction. High value = the adapter is moving images in the SEMANTIC
     direction we wanted ('photo' -> 'anime sprite Naruto'). Per-image, then
-    averaged."""
+    averaged. Uses the robust _clip_feats / _clip_text_feats helpers."""
     from transformers import CLIPModel, CLIPProcessor
     proc = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
     clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14").to("cuda").eval()
 
-    @torch.no_grad()
-    def txt_feat(text):
-        x = proc(text=[text], return_tensors="pt", padding=True).to("cuda")
-        f = clip.get_text_features(**x)
-        return f / f.norm(dim=-1, keepdim=True)
+    txt = _clip_text_feats(clip, proc, [text_source, text_target])  # (2, D)
+    text_dir = (txt[1] - txt[0])
+    text_dir = text_dir / text_dir.norm()
 
-    @torch.no_grad()
-    def img_feat(img):
-        x = proc(images=[img], return_tensors="pt").to("cuda")
-        f = clip.get_image_features(**x)
-        return f / f.norm(dim=-1, keepdim=True)
-
-    t_src = txt_feat(text_source)
-    t_tgt = txt_feat(text_target)
-    text_dir = (t_tgt - t_src)
-    text_dir = text_dir / text_dir.norm(dim=-1, keepdim=True)
-
-    sims = []
-    for b_img, a_img in zip(before_imgs, after_imgs):
-        i_src = img_feat(b_img)
-        i_tgt = img_feat(a_img)
-        img_dir = (i_tgt - i_src)
-        n = img_dir.norm(dim=-1, keepdim=True)
-        if n.item() < 1e-8:
-            continue   # identical images -> direction undefined
-        img_dir = img_dir / n
-        sims.append(float((img_dir * text_dir).sum().item()))
-    return {"value": float(np.mean(sims)) if sims else None,
-            "std":   float(np.std(sims))  if sims else None,
-            "n":     len(sims)}
+    before_f = _clip_feats(clip, proc, before_imgs)  # (N, D)
+    after_f  = _clip_feats(clip, proc, after_imgs)
+    img_dir = after_f - before_f                     # (N, D)
+    norms = img_dir.norm(dim=-1, keepdim=True)
+    valid = (norms > 1e-8).squeeze(-1)
+    img_dir = img_dir[valid] / norms[valid]
+    sims = (img_dir @ text_dir).numpy()
+    return {"value": float(sims.mean()) if sims.size else None,
+            "std":   float(sims.std())  if sims.size else None,
+            "n":     int(valid.sum().item())}
 
 
 def metric_dino_sim(gen_imgs, ref_imgs):
@@ -384,6 +437,8 @@ def main():
     # --- Distribution-level (compare before/after vs real) ---
     results["before"]["FID"]     = run_metric("FID before",     metric_fid,    before, real_extended)
     results["after"] ["FID"]     = run_metric("FID after",      metric_fid,    after,  real_extended)
+    results["before"]["KID"]     = run_metric("KID before",     metric_kid,    before, real_extended)
+    results["after"] ["KID"]     = run_metric("KID after",      metric_kid,    after,  real_extended)
     results["before"]["ArtFID"]  = run_metric("ArtFID before",  metric_artfid, before, real_extended)
     results["after"] ["ArtFID"]  = run_metric("ArtFID after",   metric_artfid, after,  real_extended)
     results["before"]["CMMD"]    = run_metric("CMMD before",    metric_cmmd,   before, real_extended)
@@ -401,7 +456,7 @@ def main():
 
     # Delta summary: for each metric where both before/after are defined as a
     # single number, compute after - before (sign convention noted per metric).
-    for m in ["FID", "ArtFID", "CMMD", "DINO", "CLIP_IQA"]:
+    for m in ["FID", "KID", "ArtFID", "CMMD", "DINO", "CLIP_IQA"]:
         b = results["before"][m].get("value")
         a = results["after"][m].get("value")
         if b is not None and a is not None:
@@ -414,6 +469,8 @@ def main():
     print(SEP)
     print(f"  FID            : {results['before']['FID'].get('value')}"
           f"  -> {results['after']['FID'].get('value')}  (lower is better)")
+    print(f"  KID            : {results['before']['KID'].get('value')}"
+          f"  -> {results['after']['KID'].get('value')}  (lower is better)")
     print(f"  ArtFID         : {results['before']['ArtFID'].get('value')}"
           f"  -> {results['after']['ArtFID'].get('value')}  (lower is better)")
     print(f"  CMMD           : {results['before']['CMMD'].get('value')}"

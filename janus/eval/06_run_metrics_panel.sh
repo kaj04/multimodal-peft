@@ -51,6 +51,14 @@ check_and_install () {
 }
 check_and_install cleanfid clean-fid
 check_and_install pyiqa
+# setuptools provides pkg_resources, required by CLIP-IQA inside pyiqa.
+# Some clean condas don't ship it. --no-deps keeps numpy/scipy untouched.
+check_and_install pkg_resources setuptools
+# ArtFID (paper 2207.12280): style-aware FID with Inception fine-tuned on
+# WikiArt. Requires numpy<2, which our env already satisfies after the
+# Jun-7 repair (numpy 1.26.4 + scipy<1.13). --no-deps prevents it from
+# trying to pin its own numpy version.
+check_and_install art_fid art-fid
 
 $JANUS_PY ~/multimodal-peft/janus/eval/06_metrics_panel.py
 

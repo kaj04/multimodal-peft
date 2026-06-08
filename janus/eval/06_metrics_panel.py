@@ -197,23 +197,53 @@ def metric_kid(gen_imgs, ref_imgs):
             return {"value": None, "error": f"{type(e).__name__}: {e}"}
 
 
-def metric_artfid(gen_imgs, ref_imgs):
-    """ArtFID (Wright & Ommer 2022, arxiv 2207.12280): FID using an Inception
-    net fine-tuned on WikiArt. More faithful to stylised-art quality than the
-    ImageNet-pretrained vanilla Inception. Falls back to a NOTE if the
-    optional art-fid package isn't installed."""
+def metric_artfid(before_imgs, after_imgs, ref_imgs):
+    """ArtFID (Wright & Ommer 2022, arxiv 2207.12280). Style-aware combined
+    metric for neural style transfer, defined as
+        ArtFID = (FID_style + 1) * (LPIPS_content + 1) - 1
+    where:
+      - FID_style measures how close the stylized outputs are to a style
+        reference set (in Inception features fine-tuned on WikiArt)
+      - LPIPS_content measures how well the stylized outputs preserve the
+        content of the source images
+    Lower ArtFID = better style fidelity AND better content preservation.
+
+    The art-fid library's compute_art_fid takes THREE directory paths:
+      - stylized_imgs_path: the model's stylized outputs   -> our 'after'
+      - style_imgs_path:    reference style images          -> Naruto reals
+      - content_imgs_path:  the source content images       -> our 'before'
+    The 'before' (base model output for the same prompt) acts as the content
+    reference: it's what the model would have generated WITHOUT the adapter.
+    The adapter is judged on how much it adds Naruto style while still
+    representing the same prompt content.
+
+    Returns a single value (placed in 'delta' bucket, not before/after)."""
     try:
         from art_fid import compute_art_fid
-    except ImportError:
+    except ImportError as e:
         return {"value": None,
-                "error": "art-fid not installed (pip install art-fid). "
-                         "Fallback recommendation: report FID + CMMD."}
+                "error": f"art-fid module not importable: {e}"}
     import tempfile
-    with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
-        for i, img in enumerate(gen_imgs): img.save(f"{a}/{i:04d}.png")
-        for i, img in enumerate(ref_imgs): img.save(f"{b}/{i:04d}.png")
-        score = compute_art_fid(a, b)
-    return {"value": float(score)}
+    with tempfile.TemporaryDirectory() as a, \
+         tempfile.TemporaryDirectory() as b, \
+         tempfile.TemporaryDirectory() as c:
+        for i, img in enumerate(after_imgs):  img.save(f"{a}/{i:04d}.png")  # stylized
+        for i, img in enumerate(ref_imgs):    img.save(f"{b}/{i:04d}.png")  # style
+        for i, img in enumerate(before_imgs): img.save(f"{c}/{i:04d}.png")  # content
+        try:
+            score = compute_art_fid(
+                stylized_images_path=a,
+                style_images_path=b,
+                content_images_path=c,
+                batch_size=32,
+                num_workers=2,
+                mode="art_fid",
+                content_metric="lpips",
+                device="cuda",
+            )
+            return {"value": float(score)}
+        except Exception as e:
+            return {"value": None, "error": f"{type(e).__name__}: {e}"}
 
 
 def metric_cmmd(gen_imgs, ref_imgs):
@@ -439,8 +469,10 @@ def main():
     results["after"] ["FID"]     = run_metric("FID after",      metric_fid,    after,  real_extended)
     results["before"]["KID"]     = run_metric("KID before",     metric_kid,    before, real_extended)
     results["after"] ["KID"]     = run_metric("KID after",      metric_kid,    after,  real_extended)
-    results["before"]["ArtFID"]  = run_metric("ArtFID before",  metric_artfid, before, real_extended)
-    results["after"] ["ArtFID"]  = run_metric("ArtFID after",   metric_artfid, after,  real_extended)
+    # ArtFID is a 3-way metric (stylized vs style with content preservation
+    # penalty); it doesn't fit the before/after pattern of the other dist
+    # metrics. We compute it once with stylized=after, style=ref, content=before
+    # -> placed directly in the delta bucket below.
     results["before"]["CMMD"]    = run_metric("CMMD before",    metric_cmmd,   before, real_extended)
     results["after"] ["CMMD"]    = run_metric("CMMD after",     metric_cmmd,   after,  real_extended)
     results["before"]["DINO"]    = run_metric("DINO before",    metric_dino_sim, before, real_extended)
@@ -453,10 +485,14 @@ def main():
     # --- Pairwise (before <-> after) ---
     results["delta"]["CLIP_DirSim"] = run_metric("CLIP DirSim",  metric_clip_dirsim,
                                                   before, after)
+    # --- 3-way (before=content, after=stylized, ref=style) ---
+    results["delta"]["ArtFID"]      = run_metric("ArtFID",       metric_artfid,
+                                                  before, after, real_extended)
 
     # Delta summary: for each metric where both before/after are defined as a
     # single number, compute after - before (sign convention noted per metric).
-    for m in ["FID", "KID", "ArtFID", "CMMD", "DINO", "CLIP_IQA"]:
+    # ArtFID and CLIP_DirSim are already in delta (not computed before/after)
+    for m in ["FID", "KID", "CMMD", "DINO", "CLIP_IQA"]:
         b = results["before"][m].get("value")
         a = results["after"][m].get("value")
         if b is not None and a is not None:
@@ -471,8 +507,8 @@ def main():
           f"  -> {results['after']['FID'].get('value')}  (lower is better)")
     print(f"  KID            : {results['before']['KID'].get('value')}"
           f"  -> {results['after']['KID'].get('value')}  (lower is better)")
-    print(f"  ArtFID         : {results['before']['ArtFID'].get('value')}"
-          f"  -> {results['after']['ArtFID'].get('value')}  (lower is better)")
+    print(f"  ArtFID         : {results['delta']['ArtFID'].get('value')}  "
+          f"(lower is better; combined style + content metric)")
     print(f"  CMMD           : {results['before']['CMMD'].get('value')}"
           f"  -> {results['after']['CMMD'].get('value')}  (lower is better)")
     print(f"  DINO sim       : {results['before']['DINO'].get('value')}"

@@ -51,14 +51,30 @@ check_and_install () {
 }
 check_and_install cleanfid clean-fid
 check_and_install pyiqa
-# setuptools provides pkg_resources, required by CLIP-IQA inside pyiqa.
-# Some clean condas don't ship it. --no-deps keeps numpy/scipy untouched.
-check_and_install pkg_resources setuptools
+
+# setuptools provides pkg_resources (a namespace package required by CLIP-IQA
+# inside pyiqa). --no-deps does NOT work here: pkg_resources is an internal
+# part of setuptools that only materialises with a proper full install.
+# We do --upgrade WITHOUT --no-deps; this can pull a newer setuptools but
+# does NOT touch numpy/scipy.
+if ! $JANUS_PY -c "import pkg_resources" 2>/dev/null; then
+    echo "  [deps] installing setuptools (--upgrade, full deps)"
+    $JANUS_PY -m pip install --quiet --upgrade setuptools 2>&1 | tail -3
+else
+    echo "  [deps] pkg_resources already present, skipping setuptools install"
+fi
+
 # ArtFID (paper 2207.12280): style-aware FID with Inception fine-tuned on
-# WikiArt. Requires numpy<2, which our env already satisfies after the
-# Jun-7 repair (numpy 1.26.4 + scipy<1.13). --no-deps prevents it from
-# trying to pin its own numpy version.
-check_and_install art_fid art-fid
+# WikiArt, plus LPIPS for content preservation. Needs full deps (lpips, etc.)
+# to work -- --no-deps would leave lpips missing. We pre-pin numpy<2 so
+# art-fid's transitive deps don't try to install numpy>=2.
+if ! $JANUS_PY -c "import art_fid" 2>/dev/null; then
+    echo "  [deps] installing art-fid (full deps, numpy<2 pre-pinned)"
+    $JANUS_PY -m pip install --quiet "numpy<2" 2>&1 | tail -3
+    $JANUS_PY -m pip install --quiet "art-fid" 2>&1 | tail -3
+else
+    echo "  [deps] art_fid already present, skipping"
+fi
 
 $JANUS_PY ~/multimodal-peft/janus/eval/06_metrics_panel.py
 

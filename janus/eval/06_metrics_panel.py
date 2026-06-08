@@ -233,17 +233,20 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
         for i, img in enumerate(ref_imgs):    img.save(f"{b}/{i:04d}.png")  # style
         for i, img in enumerate(before_imgs): img.save(f"{c}/{i:04d}.png")  # content
         try:
+            # mode='art_fid_inf' is the package default: uses subsampling to
+            # estimate the infinite-N ArtFID value, which is MORE robust on
+            # small N (like our N=80) than the standard 'art_fid' mode.
             score = compute_art_fid(
-                stylized_images_path=a,
-                style_images_path=b,
-                content_images_path=c,
+                path_to_stylized=a,
+                path_to_style=b,
+                path_to_content=c,
                 batch_size=32,
-                num_workers=2,
-                mode="art_fid",
-                content_metric="lpips",
                 device="cuda",
+                mode="art_fid_inf",
+                content_metric="lpips",
+                num_workers=2,
             )
-            return {"value": float(score)}
+            return {"value": float(score), "mode": "art_fid_inf"}
         except Exception as e:
             return {"value": None, "error": f"{type(e).__name__}: {e}"}
 

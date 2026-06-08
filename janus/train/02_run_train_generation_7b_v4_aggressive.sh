@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=janus_7b_v4np
+#SBATCH --job-name=janus_7b_v4ag
 #SBATCH --partition=gpu_h100
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=140G
@@ -10,32 +10,38 @@
 #SBATCH --export=ALL
 
 # =====================================================================
-#  Janus-Pro-7B LoRA generation v4 = v2-CAPACITY but WITHOUT prefix
+#  Janus-Pro-7B LoRA generation v4-AGGRESSIVE
 #
-#  Diagnostic from v2 qualitative pairs:
-#    - With prefix:    base 7B already strong in Naruto-style, adapter
-#                      sometimes degrades it
-#    - Without prefix: adapter doesn't fire at all (img 1 unchanged)
-#                      => adapter learned the prefix as a HARD TRIGGER, not
-#                      as a style transfer signal
+#  Synthesis of three diagnostics from v1/v2:
+#    1) base 7B is already strong on Naruto-style; a "polite" adapter
+#       (low rank, low LR) gets out-competed by the base
+#    2) the prefix acted as a hard ON/OFF trigger -> adapter doesn't fire
+#       on naturally-phrased prompts at inference
+#    3) v2's moderate setup (r=16, LR 5e-5) avoided catastrophic outputs
+#       (unlike v1) but did not clearly beat the base
 #
-#  Hypothesis v4: removing the prefix from training forces the adapter to
-#    learn UNCONDITIONAL style transfer (every input -> Naruto style),
-#    instead of "gated by the trigger phrase". Lose-side: model loses
-#    ability to NOT-do-Naruto style (use base 7B for that). Win-side:
-#    consistent activation, no prefix-dependency confusion, cleaner
-#    interpretation of "is the adapter learning style?".
+#  v4-AGGRESSIVE pushes harder on three axes at once:
+#    - LORA_RANK     16 -> 32           (doubled; ratio ~1.1%, 2.5x the 1B baseline)
+#    - LORA_ALPHA    32 -> 64           (keep alpha = 2*rank convention)
+#    - LR            5e-5 -> 8e-5       (more force per step to overpower base)
+#    - LORA_DROPOUT  0.05 -> 0.10       (counter overfit risk from higher capacity)
+#    - EPOCHS        8 -> 6             (with stronger steps, fewer epochs avoid late-stage overfit)
+#    - CAPTION_PREFIX "" (empty)        (no hard-trigger gate; unconditional style transfer)
 #
-#  Variable isolation: this run differs from v2-CAPACITY ONLY in
-#  CAPTION_PREFIX="" (empty). Same rank, MLP modules, LR, epochs.
-#  -> a v2 vs v4 comparison cleanly attributes any difference to the
-#  prefix factor.
+#  W&B samples logging is now ON in the trainer -> you can scrub through
+#  the 4 fixed-prompt samples per checkpoint in the W&B UI without rsync.
+#  If you see degradation creeping in around e.g. step 600, you can scancel
+#  and use the latest good adapter (adapter_epochN with the lowest val_CE).
+#
+#  Honest hedge: if A still doesn't clearly beat the base 7B, the result
+#  itself is informative -- documents the LoRA + small-data + strong-base
+#  limitation, which is a legitimate finding for the thesis.
 # =====================================================================
 
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
 
 echo "================================================================"
-echo "  Janus-Pro-7B LoRA v4-NOPREFIX  (v2 config minus prefix)"
+echo "  Janus-Pro-7B LoRA v4-AGGRESSIVE  (r=32, LR 8e-5, no prefix, dropout 0.1)"
 echo "  Started: $(date)"
 echo "================================================================"
 
@@ -49,28 +55,29 @@ JANUS_PY=$HOME/.conda/envs/janus/bin/python
 echo "  python = $JANUS_PY"
 $JANUS_PY --version
 
-# --- Run config (v4 = v2 minus prefix) ---
+# --- Run config (v4-AGGRESSIVE) ---
 export MODEL_ID="deepseek-community/Janus-Pro-7B"
-export RUN_NAME="gen_7b_naruto_v4_noprefix"
+export RUN_NAME="gen_7b_naruto_v4_aggressive"
 export DATASET_SOURCE="hf"
 export HF_DATASET_NAME="lambdalabs/naruto-blip-captions"
 export HF_IMAGE_COL="image"
 export HF_TEXT_COL="text"
 
-# THE key change: no prefix during training
+# No prefix during training (key change vs v2/v3)
 export CAPTION_PREFIX=""
 
-# Same capacity as v2 (isolate the prefix variable)
-export LORA_RANK="16"
-export LORA_ALPHA="32"
+# Aggressive capacity
+export LORA_RANK="32"
+export LORA_ALPHA="64"
+export LORA_DROPOUT="0.1"
 export TARGET_MODULES="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 
-# No KL reg (we want a clean v2-without-prefix comparison; KL is v3's thing)
+# No KL reg (clean comparison vs v2; v3 already tests the KL axis)
 export KL_LAMBDA="0.0"
 
-# Optimisation (same as v2-CAPACITY)
-export EPOCHS="8"
-export LR="5e-5"
+# Optimisation
+export EPOCHS="6"
+export LR="8e-5"
 export LR_SCHEDULE="cosine"
 export WARMUP_RATIO="0.05"
 export ADAM_BETA1="0.9"

@@ -62,8 +62,12 @@ GEN_EVAL_N = int(os.environ.get("GEN_EVAL_N", "30"))   # images are slow to gen
 EPOCHS     = int(os.environ.get("EPOCHS", "3"))        # gen needs more than 1
 GRAD_ACCUM = int(os.environ.get("GRAD_ACCUM", "8"))
 LR         = float(os.environ.get("LR", "5e-5"))       # lower than text LR; gen loss is sparser
-LORA_RANK  = int(os.environ.get("LORA_RANK", "4"))     # captioning saturates at low r; try the same regime
-LORA_ALPHA = int(os.environ.get("LORA_ALPHA", str(2 * int(os.environ.get("LORA_RANK", "4")))))
+LORA_RANK    = int(os.environ.get("LORA_RANK", "4"))   # captioning saturates at low r; try the same regime
+LORA_ALPHA   = int(os.environ.get("LORA_ALPHA", str(2 * int(os.environ.get("LORA_RANK", "4")))))
+# LoRA dropout. Default 0.05 is the PEFT library default and what we used in
+# v1/v2/v3. v4-AGGRESSIVE bumps to 0.1 to mitigate overfit risk when running
+# higher rank + higher LR on a small dataset.
+LORA_DROPOUT = float(os.environ.get("LORA_DROPOUT", "0.05"))
 SEED       = int(os.environ.get("SEED", "42"))
 
 # Dataset source. "coco" (default) keeps the existing val2017 split workflow.
@@ -499,7 +503,8 @@ def main():
     print(f"  LoRA GENERATION fine-tune | run={RUN_NAME}")
     print(f"  TRAIN_N={TRAIN_N} EVAL_N={EVAL_N} GEN_EVAL_N={GEN_EVAL_N}")
     print(f"  EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} weight_decay={WEIGHT_DECAY}")
-    print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
+    print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
+          f"warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
     print(f"  recon_loss_weight={RECON_LOSS_WEIGHT}  (0 = plain CE, Anole uses ~0.5)")
     print(f"  kl_lambda={KL_LAMBDA}  (0 = no KL reg; >0 enables KL(p_adapter || p_base) "
           f"-> doubles transformer fwd cost)")
@@ -515,7 +520,8 @@ def main():
         "cuda" if torch.cuda.is_available() else "cpu")
     lora_cfg = LoraConfig(r=LORA_RANK, lora_alpha=LORA_ALPHA,
                           target_modules=TARGET_MODULES,
-                          lora_dropout=0.05, bias="none", task_type=TaskType.CAUSAL_LM)
+                          lora_dropout=LORA_DROPOUT, bias="none",
+                          task_type=TaskType.CAUSAL_LM)
     # Inject in-place: keep `base` for the custom forward, `peft_model` to save.
     peft_model = get_peft_model(base, lora_cfg)
     base.train()

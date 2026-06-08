@@ -4,44 +4,48 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=140G
 #SBATCH --cpus-per-task=16
-#SBATCH --time=14:00:00
+#SBATCH --time=20:00:00
 #SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.out
 #SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.err
 #SBATCH --export=ALL
 
 # =====================================================================
-#  Janus-Pro-7B LoRA generation v4-AGGRESSIVE
+#  Janus-Pro-7B LoRA generation v4 = AGGRESSIVE + KL-reg + no prefix
 #
-#  Synthesis of three diagnostics from v1/v2:
-#    1) base 7B is already strong on Naruto-style; a "polite" adapter
-#       (low rank, low LR) gets out-competed by the base
-#    2) the prefix acted as a hard ON/OFF trigger -> adapter doesn't fire
-#       on naturally-phrased prompts at inference
-#    3) v2's moderate setup (r=16, LR 5e-5) avoided catastrophic outputs
-#       (unlike v1) but did not clearly beat the base
+#  Synthesis of diagnostics from v1, v2, v3 + supervisor meeting:
+#    v1 (r=8, prefix)              -> catastrophic outputs (blob faces)
+#    v2 (r=16, prefix)             -> coherent but didn't clearly beat base;
+#                                     gate problem on natural prompts
+#    v3 (v2 + KL_LAMBDA=0.5)       -> KL RESOLVED the degradation on prefix
+#                                     prompts (Sakura no longer broken;
+#                                     glasses-Naruto preserved). Gate problem
+#                                     persists on natural prompts.
 #
-#  v4-AGGRESSIVE pushes harder on three axes at once:
-#    - LORA_RANK     16 -> 32           (doubled; ratio ~1.1%, 2.5x the 1B baseline)
-#    - LORA_ALPHA    32 -> 64           (keep alpha = 2*rank convention)
-#    - LR            5e-5 -> 8e-5       (more force per step to overpower base)
-#    - LORA_DROPOUT  0.05 -> 0.10       (counter overfit risk from higher capacity)
-#    - EPOCHS        8 -> 6             (with stronger steps, fewer epochs avoid late-stage overfit)
-#    - CAPTION_PREFIX "" (empty)        (no hard-trigger gate; unconditional style transfer)
+#  v4 combines the WINS from each axis simultaneously:
+#    - LORA_RANK     16 -> 32          (more capacity to actually learn style)
+#    - LORA_ALPHA    32 -> 64          (preserve alpha = 2*rank)
+#    - LORA_DROPOUT  0.05 -> 0.10      (mitigate overfit at higher rank/LR)
+#    - LR            5e-5 -> 8e-5      (more force per step)
+#    - EPOCHS        8 -> 6            (compensate stronger steps -> fewer epochs)
+#    - CAPTION_PREFIX  ""              (fix the gate problem: no hard trigger)
+#    - KL_LAMBDA     0.5 (KEPT)        (proven anti-degradation regularizer)
 #
-#  W&B samples logging is now ON in the trainer -> you can scrub through
-#  the 4 fixed-prompt samples per checkpoint in the W&B UI without rsync.
-#  If you see degradation creeping in around e.g. step 600, you can scancel
-#  and use the latest good adapter (adapter_epochN with the lowest val_CE).
+#  Conceptual bet: aggressive capacity + push gives the adapter the AUTHORITY
+#  to learn unconditional style transfer (since no prefix gates it), while
+#  the KL regularizer anchors it so the new capacity doesn't overwrite
+#  good base behaviour (the failure mode of v1/v2). The two forces are in
+#  productive tension -- CE pulls toward dataset style, KL pulls back to base.
+#  Sweet spot: adapter learns when CE signal is strong, defers when not.
 #
-#  Honest hedge: if A still doesn't clearly beat the base 7B, the result
-#  itself is informative -- documents the LoRA + small-data + strong-base
-#  limitation, which is a legitimate finding for the thesis.
+#  W&B sample logging ON: scroll-through visual trace per checkpoint in the
+#  UI (no rsync needed). If degradation creeps in at e.g. step 800, scancel
+#  and keep the best adapter_epochN by val_CE + visual inspection.
 # =====================================================================
 
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
 
 echo "================================================================"
-echo "  Janus-Pro-7B LoRA v4-AGGRESSIVE  (r=32, LR 8e-5, no prefix, dropout 0.1)"
+echo "  Janus-Pro-7B LoRA v4  (r=32, LR 8e-5, dropout 0.1, no prefix, KL_LAMBDA=0.5)"
 echo "  Started: $(date)"
 echo "================================================================"
 
@@ -72,8 +76,13 @@ export LORA_ALPHA="64"
 export LORA_DROPOUT="0.1"
 export TARGET_MODULES="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 
-# No KL reg (clean comparison vs v2; v3 already tests the KL axis)
-export KL_LAMBDA="0.0"
+# KL-to-base regularizer (preserved from v3, which empirically RESOLVED the
+# v2 degradation problem on prefix prompts -- AFTER no longer noticeably
+# worse than BEFORE on the Sakura/red-panda-style canonical outputs).
+# Hypothesis: KL + aggressive setup work together -- the aggressive capacity
+# gives the adapter enough power to actually learn style transfer; the KL
+# regularizer prevents that power from overwriting good base capability.
+export KL_LAMBDA="0.5"
 
 # Optimisation
 export EPOCHS="6"

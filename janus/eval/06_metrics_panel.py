@@ -232,15 +232,29 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
         for i, img in enumerate(after_imgs):  img.save(f"{a}/{i:04d}.png")  # stylized
         for i, img in enumerate(ref_imgs):    img.save(f"{b}/{i:04d}.png")  # style
         for i, img in enumerate(before_imgs): img.save(f"{c}/{i:04d}.png")  # content
+
+        # Aggressive monkeypatch: art-fid creates INTERNAL DataLoaders (in
+        # image_metrics.py for LPIPS, possibly others) with hardcoded
+        # num_workers>0, which crash with 'Trying to resize storage that
+        # is not resizable' on this torch version. Passing num_workers=0
+        # to compute_art_fid only affects the OUTER loader, not the
+        # internal ones. We force num_workers=0 globally for the duration
+        # of this call by patching torch.utils.data.DataLoader.__init__
+        # to override any non-zero num_workers (and the kwargs that
+        # implicitly require workers). Restored on exit via finally.
+        import torch.utils.data as _td
+        _orig_init = _td.DataLoader.__init__
+        def _patched_init(self, *args, **kwargs):
+            kwargs["num_workers"] = 0
+            kwargs.pop("persistent_workers", None)
+            kwargs.pop("prefetch_factor", None)
+            return _orig_init(self, *args, **kwargs)
+        _td.DataLoader.__init__ = _patched_init
+
         try:
             # mode='art_fid_inf' is the package default: uses subsampling to
             # estimate the infinite-N ArtFID value, which is MORE robust on
             # small N (like our N=80) than the standard 'art_fid' mode.
-            # num_workers=0 (no DataLoader multiprocessing). num_workers>0
-            # triggers a 'Trying to resize storage that is not resizable'
-            # crash in torch's default_collate on this combination of
-            # torch version + art-fid Dataset shape. Single-process load
-            # adds ~30s of latency on N=80 -- negligible.
             score = compute_art_fid(
                 path_to_stylized=a,
                 path_to_style=b,
@@ -254,6 +268,9 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
             return {"value": float(score), "mode": "art_fid_inf"}
         except Exception as e:
             return {"value": None, "error": f"{type(e).__name__}: {e}"}
+        finally:
+            # Always restore the original DataLoader behaviour, even on error
+            _td.DataLoader.__init__ = _orig_init
 
 
 def metric_cmmd(gen_imgs, ref_imgs):

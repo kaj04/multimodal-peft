@@ -92,6 +92,15 @@ GRAD_CLIP     = float(os.environ.get("GRAD_CLIP", "1.0"))
 ADAM_BETA1    = float(os.environ.get("ADAM_BETA1", "0.9"))
 ADAM_BETA2    = float(os.environ.get("ADAM_BETA2", "0.95"))
 
+# Match the v5 image-only baseline: extended target_modules (attention + MLP),
+# higher dropout, KL-to-base regularizer. Without these the joint trainer
+# would inherit v1's broken capacity profile.
+LORA_DROPOUT = float(os.environ.get("LORA_DROPOUT", "0.1"))
+TARGET_MODULES = os.environ.get(
+    "TARGET_MODULES",
+    "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj").split(",")
+KL_LAMBDA = float(os.environ.get("KL_LAMBDA", "0.0"))
+
 EVAL_EVERY_STEPS = int(os.environ.get("EVAL_EVERY_STEPS", "100"))
 EVAL_MID_N       = int(os.environ.get("EVAL_MID_N", "10"))
 
@@ -159,8 +168,12 @@ def _apply_prefix(caption: str) -> str:
     return caption
 
 
-def image_generation_loss(base, processor, image, caption):
-    """Same as 02_train_generation.generation_loss (plain CE on VQ tokens)."""
+def image_generation_loss(base, processor, image, caption,
+                          kl_weight: float = 0.0, peft_model=None):
+    """Same as 02_train_generation.generation_loss but for the joint setting.
+    Supports the v5 KL-to-base regularizer (adapter is held close to the
+    frozen base distribution; same recipe that solved the v2 degradation
+    failure mode in the image-only baseline)."""
     inner = base.model
     device = base.device
     dtype = next(base.parameters()).dtype
@@ -179,15 +192,28 @@ def image_generation_loss(base, processor, image, caption):
     text_embeds  = base.get_input_embeddings()(text_ids)
     image_embeds = base.prepare_embeddings_for_image_generation(image_tokens)
     inputs_embeds = torch.cat([text_embeds, image_embeds[:, :-1, :]], dim=1)
-
-    hidden = inner(inputs_embeds=inputs_embeds).last_hidden_state
     Lt = text_embeds.shape[1]
+
+    # Adapter forward
+    hidden = inner(inputs_embeds=inputs_embeds).last_hidden_state
     img_hidden = hidden[:, Lt - 1:, :]
     logits = inner.generation_head(img_hidden)
 
     logits_f = logits.float()
     targets = image_tokens.reshape(-1).long()
     ce = F.cross_entropy(logits_f.reshape(-1, logits_f.shape[-1]), targets)
+
+    if kl_weight > 0.0 and peft_model is not None:
+        # Base distribution forward (adapter disabled, no grad)
+        with peft_model.disable_adapter():
+            with torch.no_grad():
+                hidden_b = inner(inputs_embeds=inputs_embeds).last_hidden_state
+                img_hidden_b = hidden_b[:, Lt - 1:, :]
+                logits_b = inner.generation_head(img_hidden_b).float()
+        log_p_a = F.log_softmax(logits_f, dim=-1)
+        log_p_b = F.log_softmax(logits_b, dim=-1)
+        kl = (log_p_a.exp() * (log_p_a - log_p_b)).sum(dim=-1).mean()
+        return ce + kl_weight * kl
     return ce
 
 
@@ -300,7 +326,10 @@ def main():
     print(f"  MODEL_ID={MODEL_ID}")
     print(f"  TEXT_BUCKET={TEXT_BUCKET}  TEXT_RATIO={TEXT_RATIO}  TEXT_LR_SCALE={TEXT_LR_SCALE}")
     print(f"  EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} schedule={LR_SCHEDULE}")
-    print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} betas=({ADAM_BETA1},{ADAM_BETA2})")
+    print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
+          f"betas=({ADAM_BETA1},{ADAM_BETA2})")
+    print(f"  target_modules={TARGET_MODULES}")
+    print(f"  kl_lambda={KL_LAMBDA}")
     print(f"  caption_prefix={CAPTION_PREFIX!r}")
     print(SEP + "\n")
 
@@ -309,8 +338,9 @@ def main():
         MODEL_ID, torch_dtype=torch.bfloat16).to(
         "cuda" if torch.cuda.is_available() else "cpu")
     lora_cfg = LoraConfig(r=LORA_RANK, lora_alpha=LORA_ALPHA,
-                          target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-                          lora_dropout=0.05, bias="none", task_type=TaskType.CAUSAL_LM)
+                          target_modules=TARGET_MODULES,
+                          lora_dropout=LORA_DROPOUT, bias="none",
+                          task_type=TaskType.CAUSAL_LM)
     peft_model = get_peft_model(base, lora_cfg)
     base.train()
     trainable = [p for p in base.parameters() if p.requires_grad]
@@ -414,7 +444,9 @@ def main():
                 img_cursor += 1
                 image = get_image(img_id)
                 loss = image_generation_loss(base, processor, image,
-                                             _apply_prefix(refs[img_id][0]))
+                                             _apply_prefix(refs[img_id][0]),
+                                             kl_weight=KL_LAMBDA,
+                                             peft_model=peft_model)
                 running_img += loss.item()
                 running_img_n += 1
 

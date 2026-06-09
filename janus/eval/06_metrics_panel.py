@@ -229,9 +229,21 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
     with tempfile.TemporaryDirectory() as a, \
          tempfile.TemporaryDirectory() as b, \
          tempfile.TemporaryDirectory() as c:
-        for i, img in enumerate(after_imgs):  img.save(f"{a}/{i:04d}.png")  # stylized
-        for i, img in enumerate(ref_imgs):    img.save(f"{b}/{i:04d}.png")  # style
-        for i, img in enumerate(before_imgs): img.save(f"{c}/{i:04d}.png")  # content
+        # IMPORTANT: art-fid's internal DataLoader tries to stack images
+        # into a single batch tensor via default_collate, which crashes if
+        # the images have different sizes ("stack expects each tensor to be
+        # equal size"). The real Naruto BLIP images vary in resolution
+        # (~256 to ~1076 px). We FORCE all images to a common 256x256 before
+        # saving so the collate is well-formed. 256x256 is large enough for
+        # both Inception (resizes to 299) and LPIPS without lossy downscaling
+        # of the 384x384 Janus generations.
+        from PIL import Image as _PILImage
+        _SIZE = 256
+        def _norm(img):
+            return img.convert("RGB").resize((_SIZE, _SIZE), _PILImage.BICUBIC)
+        for i, img in enumerate(after_imgs):  _norm(img).save(f"{a}/{i:04d}.png")  # stylized
+        for i, img in enumerate(ref_imgs):    _norm(img).save(f"{b}/{i:04d}.png")  # style
+        for i, img in enumerate(before_imgs): _norm(img).save(f"{c}/{i:04d}.png")  # content
 
         # Aggressive monkeypatch: art-fid creates INTERNAL DataLoaders (in
         # image_metrics.py for LPIPS, possibly others) with hardcoded

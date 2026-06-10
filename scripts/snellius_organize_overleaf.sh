@@ -34,13 +34,18 @@ set -u
 BASE="$HOME/multimodal-peft/janus/tests/output"
 DEST="$BASE/overleaf/janus_comparison"
 
-# Indices 0,1,5,7,8 -> qualitative script tags
+# Indices 0,1,2,5,6,7,8,9 -> qualitative script tags
+# (eval block 00-04, human block 05-09; we skip eval_03/04 to keep the
+# eval/human balance at 3 + 5 = 8 rows in the Overleaf figure)
 TAGS=(
     "eval_00_natural"
     "eval_01_natural"
+    "eval_02_natural"
     "human_05_natural"
+    "human_06_natural"
     "human_07_natural"
     "human_08_natural"
+    "human_09_natural"
 )
 
 mkdir -p "$DEST"

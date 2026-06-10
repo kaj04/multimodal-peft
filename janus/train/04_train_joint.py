@@ -56,6 +56,9 @@ MODEL_ID   = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-7B")
 TEXT_BUCKET = os.environ.get("TEXT_BUCKET", "none").lower()   # none|matched|near|far
 TEXT_RATIO  = float(os.environ.get("TEXT_RATIO", "0.5"))      # fraction of micro-steps that are text
 TEXT_LR_SCALE = float(os.environ.get("TEXT_LR_SCALE", "1.0")) # multiplier on text loss
+# 0 = use the whole bucket; >0 = subsample to this many chunks (size-control
+# experiment, e.g. far@320 to match matched's chunk budget).
+TEXT_MAX_CHUNKS = int(os.environ.get("TEXT_MAX_CHUNKS", "0"))
 
 DATA_PREP_DIR = Path(os.environ.get(
     "DATA_PREP_DIR",
@@ -142,7 +145,14 @@ def load_image_split():
 def load_text_chunks(bucket: str):
     """Load pre-tokenised wiki chunks (512 ids per chunk) for the given bucket.
     Returns a list of LongTensors (one per chunk). For TEXT_BUCKET=none returns
-    empty list."""
+    empty list.
+
+    If TEXT_MAX_CHUNKS > 0, the chunk list is randomly subsampled down to that
+    many chunks (seed-stable). This disentangles the corpus-SIZE confound from
+    the domain-DISTANCE one: e.g. TEXT_BUCKET=far TEXT_MAX_CHUNKS=320 yields a
+    'far' corpus with the SAME chunk budget as 'matched' (320), so any
+    difference in the resulting text-LM perplexity is attributable to domain
+    distance, not to corpus size."""
     if bucket == "none":
         return []
     path = TEXT_FILES.get(bucket)
@@ -153,8 +163,20 @@ def load_text_chunks(bucket: str):
         for line in f:
             row = json.loads(line)
             chunks.append(torch.tensor(row["input_ids"], dtype=torch.long))
-    print(f"  text bucket '{bucket}': {len(chunks)} chunks of "
-          f"{len(chunks[0]) if chunks else 0} tokens", flush=True)
+    n_full = len(chunks)
+    if TEXT_MAX_CHUNKS > 0 and n_full > TEXT_MAX_CHUNKS:
+        # Dedicated RNG so the subsample is reproducible and independent of
+        # the image-split / text-step RNGs.
+        idx = list(range(n_full))
+        random.Random(SEED + 7).shuffle(idx)
+        keep = sorted(idx[:TEXT_MAX_CHUNKS])
+        chunks = [chunks[i] for i in keep]
+        print(f"  text bucket '{bucket}': subsampled {n_full} -> "
+              f"{len(chunks)} chunks (TEXT_MAX_CHUNKS={TEXT_MAX_CHUNKS})",
+              flush=True)
+    else:
+        print(f"  text bucket '{bucket}': {len(chunks)} chunks of "
+              f"{len(chunks[0]) if chunks else 0} tokens", flush=True)
     return chunks
 
 
@@ -325,6 +347,7 @@ def main():
     print(f"  Janus JOINT fine-tune | run={RUN_NAME}")
     print(f"  MODEL_ID={MODEL_ID}")
     print(f"  TEXT_BUCKET={TEXT_BUCKET}  TEXT_RATIO={TEXT_RATIO}  TEXT_LR_SCALE={TEXT_LR_SCALE}")
+    print(f"  TEXT_MAX_CHUNKS={TEXT_MAX_CHUNKS}  (0 = full bucket)")
     print(f"  EPOCHS={EPOCHS} GRAD_ACCUM={GRAD_ACCUM} LR={LR} schedule={LR_SCHEDULE}")
     print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
           f"betas=({ADAM_BETA1},{ADAM_BETA2})")
@@ -357,6 +380,7 @@ def main():
     wandb.init(project=WANDB_PROJECT, name=RUN_NAME, config={
         "model": MODEL_ID, "direction": "joint",
         "text_bucket": TEXT_BUCKET, "text_ratio": TEXT_RATIO,
+        "text_max_chunks": TEXT_MAX_CHUNKS,
         "text_lr_scale": TEXT_LR_SCALE,
         "epochs": EPOCHS, "grad_accum": GRAD_ACCUM, "lr": LR,
         "warmup_ratio": WARMUP_RATIO, "grad_clip": GRAD_CLIP,

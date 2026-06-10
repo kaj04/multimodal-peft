@@ -155,7 +155,9 @@ def vqa_yesno_logprobs(model, processor, image, question):
 def bench_ppl(model, processor):
     from datasets import load_dataset
     print("  [PPL] loading wikitext-2-raw-v1 test ...", flush=True)
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    # Namespaced repo id required by newer huggingface_hub ('wikitext' alone
+    # raises HfUriError: Repository id must be 'namespace/name')
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
     text = "\n\n".join(t for t in ds["text"] if t.strip())
     tok = processor.tokenizer
     ids = tok.encode(text, add_special_tokens=False)

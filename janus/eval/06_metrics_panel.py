@@ -264,20 +264,23 @@ def metric_artfid(before_imgs, after_imgs, ref_imgs):
         _td.DataLoader.__init__ = _patched_init
 
         try:
-            # mode='art_fid_inf' is the package default: uses subsampling to
-            # estimate the infinite-N ArtFID value, which is MORE robust on
-            # small N (like our N=80) than the standard 'art_fid' mode.
+            # mode='art_fid' (NOT art_fid_inf) -- the _inf variant uses linear
+            # regression over subsample sizes to extrapolate to N=infinity, and
+            # with our N=80 the subsample array ends up empty, crashing with
+            # 'Found array with 0 sample(s) ... required by LinearRegression'.
+            # The plain 'art_fid' mode computes the value directly on N samples,
+            # which is what we want for a finite-sample comparison anyway.
             score = compute_art_fid(
                 path_to_stylized=a,
                 path_to_style=b,
                 path_to_content=c,
                 batch_size=32,
                 device="cuda",
-                mode="art_fid_inf",
+                mode="art_fid",
                 content_metric="lpips",
                 num_workers=0,
             )
-            return {"value": float(score), "mode": "art_fid_inf"}
+            return {"value": float(score), "mode": "art_fid"}
         except Exception as e:
             return {"value": None, "error": f"{type(e).__name__}: {e}"}
         finally:

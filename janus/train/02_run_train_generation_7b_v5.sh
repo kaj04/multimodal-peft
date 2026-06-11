@@ -77,8 +77,9 @@ export LR="${LR:-1e-4}"
 # Inherited unchanged from v4
 export LORA_DROPOUT="0.1"
 export TARGET_MODULES="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
-export KL_LAMBDA="0.5"
-export EPOCHS="6"
+# KL_LAMBDA and EPOCHS overridable (KL sweep uses ${KL_LAMBDA}; default = v5).
+export KL_LAMBDA="${KL_LAMBDA:-0.5}"
+export EPOCHS="${EPOCHS:-6}"
 export LR_SCHEDULE="cosine"
 export WARMUP_RATIO="0.05"
 export ADAM_BETA1="0.9"

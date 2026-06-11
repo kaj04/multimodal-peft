@@ -714,6 +714,30 @@ def main():
         print(f"  saved resume state -> {latest_dir}", flush=True)
 
     history["minutes"] = round((time.time() - t_start) / 60, 1)
+
+    # Pick the checkpoint with the LOWEST held-out val_CE as the canonical
+    # adapter for downstream eval (a 'adapter_best' symlink). For a rank
+    # sweep, different ranks may bottom out at different epochs, so always
+    # evaluating the last epoch would unfairly penalise ranks that converge
+    # (and start over-fitting) earlier. We record which epoch won.
+    best_epoch = None
+    if history["epochs"]:
+        best = min(history["epochs"], key=lambda e: e["val_CE"])
+        best_epoch = best["epoch"]
+        history["best_epoch"] = best_epoch
+        history["best_val_CE"] = best["val_CE"]
+        best_src = OUTPUT_DIR / f"adapter_epoch{best_epoch}"
+        best_link = OUTPUT_DIR / "adapter_best"
+        try:
+            if best_link.is_symlink() or best_link.exists():
+                best_link.unlink()
+            # Relative target so the link survives if the dir is moved
+            best_link.symlink_to(best_src.name)
+        except OSError:
+            # Filesystems without symlink support: write a pointer file instead
+            (OUTPUT_DIR / "adapter_best.txt").write_text(
+                best_src.name, encoding="utf-8")
+
     (OUTPUT_DIR / "history.json").write_text(json.dumps(history, indent=2),
                                              encoding="utf-8")
     wandb.finish()
@@ -723,6 +747,8 @@ def main():
     print(f"  baseline CLIPScore : {base_clip:.2f}")
     if history["epochs"]:
         print(f"  final CLIPScore    : {history['epochs'][-1]['CLIPScore']:.2f}")
+        print(f"  best epoch (val_CE): epoch {best_epoch} "
+              f"(val_CE={history['best_val_CE']:.4f}) -> adapter_best")
     print(f"  adapters + history in {OUTPUT_DIR}")
     print(SEP)
 

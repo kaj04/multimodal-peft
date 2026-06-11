@@ -42,9 +42,13 @@ CONDITIONS = [
 
 # Which free-gen prompt indices to show in full (keeps Table A2 compact)
 FREEGEN_SHOW = [0, 3]          # DNA, virus-vs-bacterium
-# How many MMLU rows / understanding examples
+# How many MMLU rows
 MMLU_SHOW = 6
-UNDERSTANDING_SHOW = 4         # mix of pope/mme
+# Understanding examples: explicit per-family counts so BOTH POPE and MME
+# appear (POPE = object hallucination on COCO; MME = broad perception/
+# cognition: landmark, scene, posters, OCR, ...).
+POPE_SHOW = 2
+MME_SHOW  = 2
 GEN_TRUNC = 240                # chars of continuation to show
 
 
@@ -158,12 +162,12 @@ def build_table_B(data):
     ref = next((d for d in data.values() if d), None)
     if ref is None:
         return "% no data\n"
-    # Merge pope + mme examples, take the first UNDERSTANDING_SHOW
+    # Take POPE_SHOW from pope and MME_SHOW from mme so both families appear
     ref_examples = []
-    for fam in ("pope", "mme"):
-        for ex in ref.get(fam, []):
-            ref_examples.append((fam, ex))
-    ref_examples = ref_examples[:UNDERSTANDING_SHOW]
+    for ex in ref.get("pope", [])[:POPE_SHOW]:
+        ref_examples.append(("pope", ex))
+    for ex in ref.get("mme", [])[:MME_SHOW]:
+        ref_examples.append(("mme", ex))
 
     ncol = len(CONDITIONS)
     lines = []
@@ -181,8 +185,12 @@ def build_table_B(data):
     for fam, ex in ref_examples:
         img = ex["image_file"]
         q = tex_escape(ex["question"])
-        if len(q) > 70:
-            q = q[:70] + "\\dots"
+        if len(q) > 60:
+            q = q[:60] + "\\dots"
+        # Tag MME rows with their category so the breadth is visible
+        cat = ex.get("category", "")
+        if fam == "mme" and cat:
+            q = q + f" \\textit{{({tex_escape(cat.replace('_', ' '))})}}"
         gold = ex["gold"]
         # find this example's index within its family to index per condition
         fam_idx = ref[fam].index(ex)
@@ -202,11 +210,13 @@ def build_table_B(data):
         lines.append("\\addlinespace[2pt]")
     lines[-1] = "\\bottomrule"
     lines.append("\\end{tabular}")
-    lines.append("\\caption{Visual understanding probe (POPE/MME): the yes/no "
-                 "answer each condition gives on fixed image+question examples. "
-                 "\\checkmark{} = correct. Understanding -- the direction that "
-                 "shares the backbone with the trained generation pathway -- is "
-                 "consistent across all conditions, including both joint runs.}")
+    lines.append("\\caption{Visual understanding probe: the yes/no answer each "
+                 "condition gives on fixed image+question examples, drawn from "
+                 "POPE (object hallucination on COCO) and MME (broad perception "
+                 "and cognition). \\checkmark{} = correct. Understanding -- the "
+                 "direction that shares the autoregressive backbone with the "
+                 "trained generation pathway -- stays consistent across all "
+                 "conditions, including both joint runs.}")
     lines.append("\\label{tab:qual_understanding}")
     lines.append("\\end{table}")
     return "\n".join(lines) + "\n"

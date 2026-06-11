@@ -30,8 +30,26 @@ ROOT = Path(os.environ.get(
     os.path.expanduser("~/multimodal-peft/janus/tests/output")))
 METRICS_DIR = ROOT / "metrics_panel"
 BATTERY_DIR = ROOT / "forgetting_battery"
-OUT = ROOT / "rank_sweep"
+OUT = ROOT / "overleaf" / "rank_sweep"
 OUT.mkdir(parents=True, exist_ok=True)
+
+# Two-panel normalised figure: which metrics go in each panel, and whether
+# lower-is-better (so we can orient every curve as higher=better before
+# min-max normalising onto a common 0-1 axis).
+#   (metric_name, lower_is_better, legend_label)
+IMAGE_PANEL = [
+    ("CLIP_DirSim",   False, "CLIP DirSim"),
+    ("DINO_after",    False, "DINO sim"),
+    ("CMMD_after",    True,  "CMMD"),
+    ("KID_after",     True,  "KID"),
+    ("CLIP_IQA_after",False, "CLIP-IQA"),
+]
+TEXT_PANEL = [
+    ("PPL",      True,  "WikiText PPL"),
+    ("MMLU",     False, "MMLU"),
+    ("POPE_acc", False, "POPE acc"),
+    ("MME",      False, "MME"),
+]
 
 # Every metric we extract, with (label, where it lives, how to pull it,
 # arrow for "better"). after/delta refer to the metrics_panel buckets.
@@ -58,14 +76,6 @@ METRIC_SPECS = [
     ("POPE_f1",       "^", lambda m, b: _g(b, "pope", "f1")),
     ("MME",           "^", lambda m, b: _g(b, "mme", "total_mme_score")),
 ]
-
-# Which metrics to draw in the overview figure (edit after seeing the table)
-PLOT_METRICS = [
-    ("CLIP_DirSim", "CLIP DirSim (visual acquisition, higher=better)"),
-    ("PPL",         "WikiText-2 PPL (text interference, lower=better)"),
-    ("POPE_acc",    "POPE accuracy (understanding, higher=better)"),
-]
-
 
 def load_rank(R):
     mp = METRICS_DIR / f"gen_7b_rank_r{R}__adapter_best" / "metrics_panel.json"
@@ -139,7 +149,7 @@ def main():
     print(f"  wrote {OUT/'rank_sweep_table.csv'}")
     print(f"  wrote {OUT/'rank_sweep_table.tex'}")
 
-    # ---- 2. Overview figure ----
+    # ---- 2. Two normalised panels (image-gen | text), saved separately ----
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -148,29 +158,48 @@ def main():
         print("  matplotlib not available -> skipping figure")
         return
 
-    n_panels = len(PLOT_METRICS)
-    fig, axes = plt.subplots(1, n_panels, figsize=(4.2 * n_panels, 3.4))
-    if n_panels == 1:
-        axes = [axes]
-    for ax, (mname, mlabel) in zip(axes, PLOT_METRICS):
-        xs, ys = [], []
+    def normalise(mname, lower_better):
+        """Return (xs, ys_norm): orient higher=better, then min-max to [0,1]
+        over the sweep so metrics of different scales share one y-axis.
+        NOTE: min-max amplifies flat-but-noisy metrics -- the absolute values
+        live in the table; the panel shows relative trend only."""
+        xs, vals = [], []
         for R in RANKS:
             v = rows[R].get(mname)
             if isinstance(v, (int, float)):
-                xs.append(R)
-                ys.append(v)
-        ax.plot(xs, ys, "o-", lw=2, ms=7)
+                xs.append(R); vals.append(v)
+        if not vals:
+            return [], []
+        vmin, vmax = min(vals), max(vals)
+        rng = (vmax - vmin) or 1.0
+        ys = [(v - vmin) / rng for v in vals]
+        if lower_better:                  # flip so up = better
+            ys = [1.0 - y for y in ys]
+        return xs, ys
+
+    def make_panel(spec, title, fname):
+        fig, ax = plt.subplots(figsize=(5.0, 3.8))
+        for mname, lower_better, label in spec:
+            xs, ys = normalise(mname, lower_better)
+            if xs:
+                ax.plot(xs, ys, "o-", lw=1.8, ms=6, label=label)
         ax.set_xscale("log", base=2)
         ax.set_xticks(RANKS)
         ax.set_xticklabels([str(R) for R in RANKS])
         ax.set_xlabel("LoRA rank")
-        ax.set_title(mlabel, fontsize=10)
+        ax.set_ylabel("normalised (higher = better)")
+        ax.set_ylim(-0.08, 1.08)
+        ax.set_title(title, fontsize=11)
         ax.grid(True, alpha=0.3)
-    fig.suptitle("Rank sweep (v5 config) on Janus-Pro-7B", fontsize=12)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.savefig(OUT / "rank_sweep_figure.pdf")
-    fig.savefig(OUT / "rank_sweep_figure.png", dpi=150)
-    print(f"  wrote {OUT/'rank_sweep_figure.pdf'} (+ .png)")
+        ax.legend(fontsize=8, loc="best", framealpha=0.9)
+        fig.tight_layout()
+        fig.savefig(OUT / f"{fname}.pdf")
+        fig.savefig(OUT / f"{fname}.png", dpi=150)
+        plt.close(fig)
+        print(f"  wrote {OUT/(fname+'.pdf')} (+ .png)")
+
+    make_panel(IMAGE_PANEL, "Image generation (acquisition)", "rank_sweep_image")
+    make_panel(TEXT_PANEL,  "Text & understanding (interference)", "rank_sweep_text")
 
 
 if __name__ == "__main__":

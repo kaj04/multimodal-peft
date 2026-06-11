@@ -56,19 +56,23 @@ echo "  python = $JANUS_PY"
 $JANUS_PY --version
 
 # --- Run config (v5 = v4 + (rank, LR) bump) ---
+# Variables the rank sweep overrides use ${VAR:-default} so a --export on the
+# sbatch line takes precedence; a bare launch keeps the v5 defaults.
+# (Previously these were hard exports that silently overrode --export, so the
+# rank-sweep for-loop had no effect and every run was rank=48 / same RUN_NAME.)
 export MODEL_ID="deepseek-community/Janus-Pro-7B"
-export RUN_NAME="gen_7b_naruto_v5"
+export RUN_NAME="${RUN_NAME:-gen_7b_naruto_v5}"
 export DATASET_SOURCE="hf"
 export HF_DATASET_NAME="lambdalabs/naruto-blip-captions"
 export HF_IMAGE_COL="image"
 export HF_TEXT_COL="text"
 
-export CAPTION_PREFIX=""
+export CAPTION_PREFIX="${CAPTION_PREFIX:-}"
 
-# THE only changes vs v4
-export LORA_RANK="48"
-export LORA_ALPHA="96"      # 2 * rank
-export LR="1e-4"
+# Rank-sweep variables (overridable). Default = v5 (rank 48).
+export LORA_RANK="${LORA_RANK:-48}"
+export LORA_ALPHA="${LORA_ALPHA:-96}"   # keep = 2 * rank when overriding
+export LR="${LR:-1e-4}"
 
 # Inherited unchanged from v4
 export LORA_DROPOUT="0.1"

@@ -102,33 +102,28 @@ def main():
         fp.write("\\label{tab:kl_sweep}\n\\end{table}\n")
     print(f"  wrote {OUT/'kl_sweep_table.tex'}")
 
-    # Figure: normalised curves vs KL (higher=better)
+    # Figure: single metric, ABSOLUTE scale vs KL (no normalisation -- here the
+    # effect is large and real, so absolute values show the inverted-U clearly,
+    # and 0 marks "adapter has no directional effect").
     try:
         import matplotlib; matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
         print("  matplotlib missing -> skip figure"); return
 
+    PLOT_METRIC = "CLIP_DirSim"   # most diagnostic single signal
+    xs, ys = [], []
+    for kl in kls:
+        v = rows[kl][PLOT_METRIC]
+        if isinstance(v, (int, float)):
+            xs.append(kl); ys.append(v)
     fig, ax = plt.subplots(figsize=(5.4, 4.0))
-    for n, lower_better, label in IMAGE_METRICS:
-        xs, vals = [], []
-        for kl in kls:
-            v = rows[kl][n]
-            if isinstance(v, (int, float)):
-                xs.append(kl); vals.append(v)
-        if not vals:
-            continue
-        vmin, vmax = min(vals), max(vals); rng = (vmax - vmin) or 1.0
-        ys = [(v - vmin) / rng for v in vals]
-        if lower_better:
-            ys = [1 - y for y in ys]
-        ax.plot(xs, ys, "o-", lw=1.8, ms=6, label=label)
+    ax.plot(xs, ys, "o-", lw=2, ms=7, color="C0")
+    ax.axhline(0.0, ls=":", c="gray", lw=1)   # 0 = no directional effect
     ax.set_xlabel(r"KL weight $\lambda$")
-    ax.set_ylabel("normalised (higher = better)")
-    ax.set_ylim(-0.08, 1.08)
-    ax.set_title("Image acquisition vs KL weight (r=32)", fontsize=11)
+    ax.set_ylabel("CLIP directional similarity")
+    ax.set_title("Style acquisition vs KL weight (r=32)", fontsize=11)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, loc="best", framealpha=0.9)
     fig.tight_layout()
     fig.savefig(OUT / "kl_sweep_image.pdf")
     fig.savefig(OUT / "kl_sweep_image.png", dpi=150)

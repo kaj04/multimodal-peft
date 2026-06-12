@@ -33,23 +33,18 @@ BATTERY_DIR = ROOT / "forgetting_battery"
 OUT = ROOT / "overleaf" / "rank_sweep"
 OUT.mkdir(parents=True, exist_ok=True)
 
-# Two-panel normalised figure: which metrics go in each panel, and whether
-# lower-is-better (so we can orient every curve as higher=better before
-# min-max normalising onto a common 0-1 axis).
-#   (metric_name, lower_is_better, legend_label)
-IMAGE_PANEL = [
-    ("CLIP_DirSim",   False, "CLIP DirSim"),
-    ("DINO_after",    False, "DINO sim"),
-    ("CMMD_after",    True,  "CMMD"),
-    ("KID_after",     True,  "KID"),
-    ("CLIP_IQA_after",False, "CLIP-IQA"),
-]
-TEXT_PANEL = [
-    ("PPL",      True,  "WikiText PPL"),
-    ("MMLU",     False, "MMLU"),
-    ("POPE_acc", False, "POPE acc"),
-    ("MME",      False, "MME"),
-]
+# Two-panel ABSOLUTE-value figure (no normalisation -- min-max zooming makes
+# the flat interference metrics look like a wild signal). ONE metric per
+# panel, on its natural scale, so the real magnitude of variation is honest.
+# The interference panel also draws the base-model value as a dashed line.
+#   (metric_name, where, key_path, axis_label, y_range_or_None)
+ACQ_PLOT  = ("CLIP_DirSim", ("delta", "CLIP_DirSim", "value"),
+             "CLIP directional similarity", (-0.10, 0.25))
+INT_PLOT  = ("POPE_acc", ("pope", "accuracy"),
+             "POPE accuracy", (0.5, 1.0))
+# Base-model (no-adapter) values for the dashed reference line in the
+# interference panel; read from the battery base run if available.
+BASE_TAG = "base_no_adapter"
 
 # Every metric we extract, with (label, where it lives, how to pull it,
 # arrow for "better"). after/delta refer to the metrics_panel buckets.
@@ -158,48 +153,54 @@ def main():
         print("  matplotlib not available -> skipping figure")
         return
 
-    def normalise(mname, lower_better):
-        """Return (xs, ys_norm): orient higher=better, then min-max to [0,1]
-        over the sweep so metrics of different scales share one y-axis.
-        NOTE: min-max amplifies flat-but-noisy metrics -- the absolute values
-        live in the table; the panel shows relative trend only."""
-        xs, vals = [], []
+    # Base-model interference value for the dashed reference line
+    base_int = None
+    bf = BATTERY_DIR / BASE_TAG / "forgetting_results.json"
+    if bf.exists():
+        base_int = _g(json.loads(bf.read_text()), *INT_PLOT[1])
+
+    def series(key_path_or_name, from_rows=True):
+        """Collect (xs, ys) of absolute values vs rank."""
+        xs, ys = [], []
         for R in RANKS:
-            v = rows[R].get(mname)
+            v = rows[R].get(key_path_or_name)
             if isinstance(v, (int, float)):
-                xs.append(R); vals.append(v)
-        if not vals:
-            return [], []
-        vmin, vmax = min(vals), max(vals)
-        rng = (vmax - vmin) or 1.0
-        ys = [(v - vmin) / rng for v in vals]
-        if lower_better:                  # flip so up = better
-            ys = [1.0 - y for y in ys]
+                xs.append(R); ys.append(v)
         return xs, ys
 
-    def make_panel(spec, title, fname):
-        fig, ax = plt.subplots(figsize=(5.0, 3.8))
-        for mname, lower_better, label in spec:
-            xs, ys = normalise(mname, lower_better)
-            if xs:
-                ax.plot(xs, ys, "o-", lw=1.8, ms=6, label=label)
-        ax.set_xscale("log", base=2)
-        ax.set_xticks(RANKS)
-        ax.set_xticklabels([str(R) for R in RANKS])
-        ax.set_xlabel("LoRA rank")
-        ax.set_ylabel("normalised (higher = better)")
-        ax.set_ylim(-0.08, 1.08)
-        ax.set_title(title, fontsize=11)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=8, loc="best", framealpha=0.9)
-        fig.tight_layout()
-        fig.savefig(OUT / f"{fname}.pdf")
-        fig.savefig(OUT / f"{fname}.png", dpi=150)
-        plt.close(fig)
-        print(f"  wrote {OUT/(fname+'.pdf')} (+ .png)")
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(9.4, 3.8))
 
-    make_panel(IMAGE_PANEL, "Image generation (acquisition)", "rank_sweep_image")
-    make_panel(TEXT_PANEL,  "Text & understanding (interference)", "rank_sweep_text")
+    # LEFT: acquisition, single metric, absolute scale (0 = no effect)
+    mname, _kp, ylabel, yr = ACQ_PLOT
+    xs, ys = series(mname)
+    axL.plot(xs, ys, "o-", lw=2, ms=7, color="C0")
+    axL.axhline(0.0, ls=":", c="gray", lw=1)          # 0 = adapter has no effect
+    axL.set_xscale("log", base=2); axL.set_xticks(RANKS)
+    axL.set_xticklabels([str(R) for R in RANKS])
+    axL.set_xlabel("LoRA rank"); axL.set_ylabel(ylabel)
+    if yr: axL.set_ylim(*yr)
+    axL.set_title("Image generation (acquisition)", fontsize=11)
+    axL.grid(True, alpha=0.3)
+
+    # RIGHT: interference, single metric, absolute scale + base reference
+    mname, _kp, ylabel, yr = INT_PLOT
+    xs, ys = series(mname)
+    axR.plot(xs, ys, "o-", lw=2, ms=7, color="C3", label="adapter")
+    if base_int is not None:
+        axR.axhline(base_int, ls="--", c="k", lw=1.2,
+                    label=f"base ({base_int:.3f})")
+    axR.set_xscale("log", base=2); axR.set_xticks(RANKS)
+    axR.set_xticklabels([str(R) for R in RANKS])
+    axR.set_xlabel("LoRA rank"); axR.set_ylabel(ylabel)
+    if yr: axR.set_ylim(*yr)
+    axR.set_title("Understanding (interference)", fontsize=11)
+    axR.grid(True, alpha=0.3); axR.legend(fontsize=9, loc="lower right")
+
+    fig.tight_layout()
+    fig.savefig(OUT / "rank_sweep_figure.pdf")
+    fig.savefig(OUT / "rank_sweep_figure.png", dpi=150)
+    plt.close(fig)
+    print(f"  wrote {OUT/'rank_sweep_figure.pdf'} (+ .png)")
 
 
 if __name__ == "__main__":

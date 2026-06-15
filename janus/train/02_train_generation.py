@@ -428,17 +428,25 @@ def _apply_prefix(caption: str) -> str:
 # (test in-distribution) and WITHOUT-prefix (test if the adapter "activates"
 # the learned style even without the trigger phrase). Hardcoded so the dumps
 # are directly comparable across steps and across runs.
-_FIXED_SAMPLE_PROMPTS = [
-    # In-distribution prefix prompts (test whether the adapter improves on
-    # the canonicals the base 7B already handles well)
-    ("with_prefix",  "anime sprite in Naruto style, a young man with blonde spiky hair"),
-    ("with_prefix",  "anime sprite in Naruto style, a ninja jumping between rooftops"),
-    ("with_prefix",  "anime sprite in Naruto style, a teenage girl with pink hair"),
-    # Natural prompts (test the gate problem: does the adapter fire without prefix?)
-    ("no_prefix",    "a young man with blonde spiky hair"),
-    ("no_prefix",    "a samurai warrior holding a katana"),
-    ("no_prefix",    "a wise old man with a long white beard"),
+# Neutral, style-agnostic sample prompts so the W&B media trace is meaningful
+# for ANY dataset/style (Naruto, pixel art, ...). The adapter renders these in
+# whatever style it is learning; CAPTION_PREFIX (if set) is applied via
+# _apply_prefix at generation time. Override with SAMPLE_PROMPTS env var
+# (semicolon-separated) for dataset-specific probes.
+_DEFAULT_SAMPLE_PROMPTS = [
+    "a cat sitting on a chair",
+    "a young man with blonde spiky hair",
+    "a house on a hill at sunset",
+    "a person riding a bicycle",
+    "a bowl of fruit on a table",
+    "a robot walking in a city",
 ]
+_env_sp = os.environ.get("SAMPLE_PROMPTS", "")
+_FIXED_SAMPLE_PROMPTS = (
+    [("sample", p.strip()) for p in _env_sp.split(";") if p.strip()]
+    if _env_sp else
+    [("sample", p) for p in _DEFAULT_SAMPLE_PROMPTS]
+)
 
 
 @torch.no_grad()
@@ -462,11 +470,13 @@ def save_periodic_samples(base, processor, out_root, global_step, n_prompts):
     wandb_images = []
     for k, (tag, prompt) in enumerate(_FIXED_SAMPLE_PROMPTS[:n_prompts]):
         torch.manual_seed(SEED + k)
-        img = generate_image(base, processor, prompt)
-        # Filename includes the tag so it's obvious at a glance which is which
+        # Apply CAPTION_PREFIX (if any) so the samples reflect the training
+        # regime: prefixed for Naruto-style runs, plain for prefix-free runs.
+        gen_prompt = _apply_prefix(prompt)
+        img = generate_image(base, processor, gen_prompt)
         img.save(out_dir / f"{k:02d}_{tag}.png")
         if wandb_active:
-            wandb_images.append(_wandb.Image(img, caption=f"{k:02d}_{tag} :: {prompt}"))
+            wandb_images.append(_wandb.Image(img, caption=f"{k:02d}_{tag} :: {gen_prompt}"))
     if wandb_active and wandb_images:
         # Logged as a Media panel; the W&B UI lets you scrub across steps
         _wandb.log({"samples": wandb_images, "step": global_step})

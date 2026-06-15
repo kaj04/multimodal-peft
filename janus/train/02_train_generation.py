@@ -189,9 +189,16 @@ def load_hf_image_caption_split():
     is unchanged. id2img maps int id -> PIL.Image (already loaded in RAM;
     these datasets are tiny, tens of MB)."""
     from datasets import load_dataset
+    # HF_CONFIG: dataset sub-config name (some datasets, e.g.
+    # diffusiondb-pixelart, ship multiple configs). HF_REVISION: branch/commit
+    # (e.g. 'refs/convert/parquet' to bypass deprecated loading scripts).
+    hf_config   = os.environ.get("HF_CONFIG", "") or None
+    hf_revision = os.environ.get("HF_REVISION", "") or None
     print(f"  loading {HF_DATASET_NAME} from HF "
-          f"(image_col={HF_IMAGE_COL!r}, text_col={HF_TEXT_COL!r})...", flush=True)
-    ds = load_dataset(HF_DATASET_NAME, split="train")
+          f"(config={hf_config!r}, revision={hf_revision!r}, "
+          f"image_col={HF_IMAGE_COL!r}, text_col={HF_TEXT_COL!r})...", flush=True)
+    load_args = [HF_DATASET_NAME] + ([hf_config] if hf_config else [])
+    ds = load_dataset(*load_args, split="train", revision=hf_revision)
     if HF_IMAGE_COL not in ds.column_names or HF_TEXT_COL not in ds.column_names:
         raise ValueError(
             f"dataset columns {ds.column_names!r} do not contain "

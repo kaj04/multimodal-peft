@@ -92,8 +92,9 @@ STYLES = [
      "split": "train",
      "note": "English poetry lines (Project Gutenberg)"},
 
-    {"name": "legalese", "hf": "mteb/legal_summarization", "split": "train",
-     "note": "legal contracts / opinions: dense legalese register"},
+    {"name": "legalese", "hf": "mteb/legal_summarization",
+     "config": "corpus", "split": "corpus", "text_col": "text",
+     "note": "legal contracts / terms-of-service: dense legalese register"},
 ]
 
 
@@ -150,7 +151,13 @@ def collect_text(spec, target_chars, rng):
     if spec.get("data_files"):
         kwargs["data_files"] = spec["data_files"]
 
-    # --- attempt 1: full (random access -> we can shuffle for representativeness)
+    # --- attempt 1: full (random access). Read a CONTIGUOUS span from a random
+    # offset so the NATURAL reading order is preserved regardless of row
+    # granularity (line / verse / paragraph). Shuffling rows would scramble
+    # line-level corpora (poetry, KJV) into disconnected fragments and inflate
+    # their PPL by construction -> that would measure incoherence, not style.
+    # A random start also usually lands inside real content, not Gutenberg
+    # front-matter (prefaces / licence headers sit at the very top).
     try:
         ds = load_dataset(*load_args, **kwargs)
         n = len(ds)
@@ -158,17 +165,16 @@ def collect_text(spec, target_chars, rng):
         col = _pick_text_col(sample, spec.get("text_col"))
         if col is None:
             raise ValueError("no string column found")
-        order = list(range(n))
-        rng.shuffle(order)
+        start = rng.randrange(n)
         buf, nchars = [], 0
-        for i in order:
-            t = ds[i][col]
+        for j in range(n):
+            t = ds[(start + j) % n][col]
             if isinstance(t, str) and t.strip():
                 buf.append(t.strip())
                 nchars += len(t)
                 if nchars >= target_chars:
                     break
-        return "\n\n".join(buf), col, len(buf)
+        return "\n".join(buf), col, len(buf), start
     except Exception as e:
         print(f"    (full load failed: {type(e).__name__}: {e}; "
               f"trying streaming)", flush=True)
@@ -188,7 +194,7 @@ def collect_text(spec, target_chars, rng):
             nchars += len(t)
             if nchars >= target_chars:
                 break
-    return "\n\n".join(buf), col, len(buf)
+    return "\n".join(buf), col, len(buf), 0
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +252,7 @@ def main():
               f"{(' / ' + spec['config']) if spec.get('config') else ''} ...",
               flush=True)
         try:
-            text, col, n_docs = collect_text(spec, target_chars, rng)
+            text, col, n_docs, start = collect_text(spec, target_chars, rng)
         except Exception as e:
             print(f"    SKIP {name}: {type(e).__name__}: {e}\n", flush=True)
             continue
@@ -256,9 +262,11 @@ def main():
             print(f"    SKIP {name}: not enough tokens\n", flush=True)
             continue
         res.update({"name": name, "hf": spec["hf"], "config": spec.get("config"),
-                    "text_col": col, "n_docs": n_docs, "note": spec.get("note", "")})
+                    "text_col": col, "n_docs": n_docs, "start_offset": start,
+                    "note": spec.get("note", "")})
         rows.append(res)
-        print(f"    col='{col}'  docs={n_docs}  windows={res['n_windows']}  "
+        print(f"    col='{col}'  docs={n_docs}  start={start}  "
+              f"windows={res['n_windows']}  "
               f"mean_CE={res['mean_CE']:.4f}  PPL={res['PPL']:.2f}  "
               f"({time.time()-t0:.0f}s)\n", flush=True)
 

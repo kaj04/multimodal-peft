@@ -62,10 +62,10 @@ $JANUS_PY --version
 # rank-sweep for-loop had no effect and every run was rank=48 / same RUN_NAME.)
 export MODEL_ID="deepseek-community/Janus-Pro-7B"
 export RUN_NAME="${RUN_NAME:-gen_7b_naruto_v5}"
-export DATASET_SOURCE="hf"
-export HF_DATASET_NAME="lambdalabs/naruto-blip-captions"
-export HF_IMAGE_COL="image"
-export HF_TEXT_COL="text"
+export DATASET_SOURCE="${DATASET_SOURCE:-hf}"
+export HF_DATASET_NAME="${HF_DATASET_NAME:-lambdalabs/naruto-blip-captions}"
+export HF_IMAGE_COL="${HF_IMAGE_COL:-image}"
+export HF_TEXT_COL="${HF_TEXT_COL:-text}"
 
 export CAPTION_PREFIX="${CAPTION_PREFIX:-}"
 

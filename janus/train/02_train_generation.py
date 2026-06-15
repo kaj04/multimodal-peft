@@ -192,13 +192,24 @@ def load_hf_image_caption_split():
     # HF_CONFIG: dataset sub-config name (some datasets, e.g.
     # diffusiondb-pixelart, ship multiple configs). HF_REVISION: branch/commit
     # (e.g. 'refs/convert/parquet' to bypass deprecated loading scripts).
-    hf_config   = os.environ.get("HF_CONFIG", "") or None
-    hf_revision = os.environ.get("HF_REVISION", "") or None
+    hf_config     = os.environ.get("HF_CONFIG", "") or None
+    hf_revision   = os.environ.get("HF_REVISION", "") or None
+    # HF_DATA_FILES: point at specific parquet file(s) within the repo, e.g.
+    # '2k_random_2k/train/0000.parquet' -- needed for datasets like
+    # diffusiondb-pixelart whose parquet branch bundles incompatible
+    # sub-configs under a single 'default' config.
+    hf_data_files = os.environ.get("HF_DATA_FILES", "") or None
     print(f"  loading {HF_DATASET_NAME} from HF "
           f"(config={hf_config!r}, revision={hf_revision!r}, "
+          f"data_files={hf_data_files!r}, "
           f"image_col={HF_IMAGE_COL!r}, text_col={HF_TEXT_COL!r})...", flush=True)
     load_args = [HF_DATASET_NAME] + ([hf_config] if hf_config else [])
-    ds = load_dataset(*load_args, split="train", revision=hf_revision)
+    load_kwargs = {"split": "train"}
+    if hf_revision:
+        load_kwargs["revision"] = hf_revision
+    if hf_data_files:
+        load_kwargs["data_files"] = hf_data_files
+    ds = load_dataset(*load_args, **load_kwargs)
     if HF_IMAGE_COL not in ds.column_names or HF_TEXT_COL not in ds.column_names:
         raise ValueError(
             f"dataset columns {ds.column_names!r} do not contain "

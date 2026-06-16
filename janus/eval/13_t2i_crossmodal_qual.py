@@ -39,8 +39,9 @@ OUTPUT_DIR = Path(os.environ.get(
 )) / "t2i_crossmodal_qual" / (Path(ADAPTER).parent.name if ADAPTER else "base")
 
 # Detailed, varied prompts spanning content types (animal, landscape, portrait,
-# still-life, architecture, vehicle, food, fantasy/action). Edit freely.
-PROMPTS = [
+# still-life, architecture, vehicle, food, fantasy/action). Override with the
+# PROMPTS env (semicolon-separated) -- the sweep uses a small set per point.
+_DEFAULT_PROMPTS = [
     "a red fox sitting in a snowy forest at dawn, soft morning light",
     "a wide mountain landscape with a turquoise lake and pine trees under a clear sky",
     "a close-up portrait of an elderly fisherman with a weathered face and a wool cap",
@@ -50,6 +51,9 @@ PROMPTS = [
     "a plate of spaghetti with tomato sauce and fresh basil, top-down view",
     "an astronaut riding a horse on the surface of Mars, cinematic lighting",
 ]
+_env_p = os.environ.get("PROMPTS", "")
+PROMPTS = ([p.strip() for p in _env_p.split(";") if p.strip()]
+           if _env_p else _DEFAULT_PROMPTS)
 
 COLS = ["Base (adapter off)", "Adapter (poetry text-LoRA)"]
 SEP = "=" * 64

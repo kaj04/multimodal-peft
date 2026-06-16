@@ -28,6 +28,12 @@ BASE_BATTERY="${BASE_BATTERY:-1}"      # 1 = also run the base (no-adapter) refe
 # Light battery sizes (for the curve; full battery later on the winner)
 BMMLU="${BMMLU:-570}"; BPOPE="${BPOPE:-1000}"; BMME="${BMME:-600}"
 
+# Image-gen reference: the battery covers text-LM/knowledge/UNDERSTANDING but
+# NOT generation. So per point we also generate a few fixed prompts base-vs-
+# adapter (13_t2i) -> generation-degradation check + an illustrative grid.
+GEN_REF="${GEN_REF:-1}"
+GEN_PROMPTS="${GEN_PROMPTS:-a cat sitting on a chair;a medieval castle on a hill;a bowl of fruit on a table;an astronaut riding a horse}"
+
 if [ "$SWEEP" = "rank" ]; then
     VALUES="${VALUES:-4 8 16 32 64}"
     FIXED_KL="${FIXED_KL:-0.5}"
@@ -63,7 +69,15 @@ for v in $VALUES; do
     JB=$(sbatch --parsable --dependency=afterok:"$JT" \
         --export=ALL,ADAPTER=$ADAPTER,TAG=$NAME,MMLU_N=$BMMLU,POPE_N=$BPOPE,MME_N=$BMME \
         "$REPO/janus/eval/07_run_forgetting_battery.sh")
-    echo "  $NAME : train $JT -> battery $JB (afterok)"
+    LINE="  $NAME : train $JT -> battery $JB"
+
+    if [ "$GEN_REF" = "1" ]; then
+        JI=$(sbatch --parsable --dependency=afterok:"$JT" \
+            --export=ALL,ADAPTER=$ADAPTER,PROMPTS="$GEN_PROMPTS" \
+            "$REPO/janus/eval/13_run_t2i_crossmodal_qual.sh")
+        LINE="$LINE + t2i $JI"
+    fi
+    echo "$LINE  (afterok:$JT)"
 done
 
 echo "------------------------------------------------------------------"
@@ -72,4 +86,5 @@ echo "  morning read:"
 echo "    task gain : ~/multimodal-peft/janus/train/output/text_poetry_r*/history.json"
 echo "    forgetting: ~/multimodal-peft/janus/tests/output/forgetting_battery/text_poetry_r*/forgetting_results.json"
 echo "    reference : .../forgetting_battery/base_light/forgetting_results.json"
+echo "    gen grids : ~/multimodal-peft/janus/tests/output/t2i_crossmodal_qual/text_poetry_r*/t2i_crossmodal_grid.png"
 echo "=================================================================="

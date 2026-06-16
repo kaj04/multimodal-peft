@@ -53,8 +53,9 @@ from metrics import CLIPScorer, generate_image  # noqa: E402
 # --- CONFIG (env-overridable) ----------------------------------------------
 MODEL_ID   = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-1B")
 COCO_DIR   = Path("/scratch-shared/tesr125338/coco")
-VAL_IMAGES = COCO_DIR / "val2017"
-VAL_CAPS   = COCO_DIR / "annotations" / "captions_val2017.json"
+COCO_SPLIT = os.environ.get("COCO_SPLIT", "val2017")   # val2017 | train2017
+VAL_IMAGES = COCO_DIR / COCO_SPLIT
+VAL_CAPS   = COCO_DIR / "annotations" / f"captions_{COCO_SPLIT}.json"
 
 TRAIN_N    = int(os.environ.get("TRAIN_N", "4000"))
 EVAL_N     = int(os.environ.get("EVAL_N", "200"))
@@ -106,6 +107,16 @@ CAPTION_PREFIX = os.environ.get("CAPTION_PREFIX", "")
 # (the way the Naruto BLIP content-captions already did). Default off so
 # existing runs are unchanged.
 CLEAN_CAPTIONS = os.environ.get("CLEAN_CAPTIONS", "0") == "1"
+
+# Target-image transform applied to every training (and eval) image.
+# "pixelart" makes a crisp, palette-reduced pixel-art version of any photo, so
+# COCO (diverse content + clean content captions) becomes a strong, distinct,
+# UNCONDITIONAL style with no adversarial captions and no duplicates. The
+# pixelation strength (block grid x palette) doubles as a controllable distance
+# dial for the forgetting-vs-intervention sweep. Default "" = no transform.
+IMAGE_TRANSFORM = os.environ.get("IMAGE_TRANSFORM", "").lower()
+PIXELART_SIZE   = int(os.environ.get("PIXELART_SIZE", "48"))    # downsample grid
+PIXELART_COLORS = int(os.environ.get("PIXELART_COLORS", "24"))  # palette size
 
 # AdamW betas. The Janus paper uses beta2=0.95 (default in transformers is 0.999).
 # Lower beta2 -> faster adaptation of the second-moment estimate, helps when
@@ -478,6 +489,23 @@ def clean_caption(text: str) -> str:
     return out if len(out) >= 3 else "an image"
 
 
+def _pixelate(img):
+    """Crisp pixel-art transform: nearest-neighbour downsample to a small grid
+    + palette quantization, then nearest upscale back. Strong & controllable
+    (PIXELART_SIZE = block grid, PIXELART_COLORS = palette)."""
+    w, h = img.size
+    small = img.resize((PIXELART_SIZE, PIXELART_SIZE), Image.NEAREST)
+    small = small.quantize(colors=PIXELART_COLORS).convert("RGB")
+    return small.resize((w, h), Image.NEAREST)
+
+
+def _apply_image_transform(img):
+    """Apply the configured target-image transform (identity if unset)."""
+    if IMAGE_TRANSFORM == "pixelart":
+        return _pixelate(img)
+    return img
+
+
 # Fixed sampling prompts for the periodic sample dumps. Mix of WITH-prefix
 # (test in-distribution) and WITHOUT-prefix (test if the adapter "activates"
 # the learned style even without the trigger phrase). Hardcoded so the dumps
@@ -648,14 +676,25 @@ def main():
     if DATASET_SOURCE == "hf":
         train_ids, eval_ids, id2src, refs = load_hf_image_caption_split()
         def get_image(img_id):
-            return id2src[img_id].convert("RGB")
+            return _apply_image_transform(id2src[img_id].convert("RGB"))
     elif DATASET_SOURCE == "coco":
         train_ids, eval_ids, id2src, refs = load_split()
         def get_image(img_id):
-            return Image.open(VAL_IMAGES / id2src[img_id]).convert("RGB")
+            return _apply_image_transform(
+                Image.open(VAL_IMAGES / id2src[img_id]).convert("RGB"))
     else:
         raise ValueError(f"unknown DATASET_SOURCE={DATASET_SOURCE!r}")
     print(f"  train images: {len(train_ids)} | eval images: {len(eval_ids)}\n")
+
+    # Dump a few TRANSFORMED training targets so the pixelation strength can be
+    # eyeballed before committing to the full run.
+    if IMAGE_TRANSFORM:
+        prev = OUTPUT_DIR / "transform_preview"
+        prev.mkdir(parents=True, exist_ok=True)
+        for k, iid in enumerate(train_ids[:4]):
+            get_image(iid).save(prev / f"{k:02d}_{IMAGE_TRANSFORM}.png")
+        print(f"  IMAGE_TRANSFORM={IMAGE_TRANSFORM} (size={PIXELART_SIZE}, "
+              f"colors={PIXELART_COLORS}) -> previews in {prev}\n", flush=True)
 
     scorer = CLIPScorer()
     wandb.init(project=WANDB_PROJECT, name=RUN_NAME, config={

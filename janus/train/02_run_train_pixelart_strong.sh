@@ -10,30 +10,33 @@
 #SBATCH --export=ALL
 
 # =====================================================================
-#  Pixel-art LoRA, STRONG + UNCONDITIONAL.
+#  Pixel-art LoRA, STRONG + UNCONDITIONAL (hyperparameter-driven).
 #
-#  The first pixel-art run (gen_7b_pixelart_r32) learned the style only as a
-#  prompt trigger: "Adapter | plain" produced no pixel art. Root cause = the
-#  DiffusionDB captions FIGHT the target (they demand "oil on canvas,
-#  photoreal, ultra detailed, 8k, by <artist>") so the model attributed the
-#  style to those words, not to itself.
+#  The first pixel-art run learned the style only as a prompt trigger:
+#  "Adapter | plain" produced no pixel art. The DiffusionDB captions fight the
+#  target ("oil on canvas, photoreal, 8k, by <artist>"), AND the KL=0.5 term
+#  pulls the adapter's output toward what the base does for those captions
+#  (= photoreal). Two forces push to photoreal; only the target images push to
+#  pixel -> weak compromise.
 #
-#  Two fixes here:
-#   1) CLEAN_CAPTIONS=1  -> strip the style boilerplate, leave only content,
-#      so the style becomes UNCONDITIONAL (like the Naruto BLIP captions).
-#   2) capacity/length   -> r=48 (was 32) + 8 epochs, no prefix.
+#  Key insight: pixelation is CONSTANT across every training image, regardless
+#  of caption. So we don't need to clean the (chaotic, hard-to-clean) captions
+#  -- we remove what FIGHTS the constant signal and add capacity/time:
+#    - KL_LAMBDA = 0    (the main lever: stop regularising toward the base's
+#                        photoreal default; also halves runtime = single fwd)
+#    - LORA_RANK = 64   (was 32; more capacity to shift the unconditional prior)
+#    - EPOCHS    = 8     no prefix, raw captions (CLEAN_CAPTIONS=0)
 #
-#  SUCCESS CRITERION: in 05c, the "Adapter | plain" column (no style word)
-#  must now show pixel art. The neutral SAMPLE_PROMPTS below let us watch this
-#  emerge live in W&B during training.
+#  SUCCESS CRITERION: in 05c, the "Adapter | plain" column (no style word) must
+#  show pixel art. Neutral SAMPLE_PROMPTS let us watch this emerge live in W&B.
 #
-#  If still weak after this run, escalate: KL_LAMBDA=0.1 then LORA_RANK=64.
+#  If still weak: bump LORA_RANK=96; if it degrades content, add KL_LAMBDA=0.1.
 # =====================================================================
 
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
 
 echo "================================================================"
-echo "  Pixel-art STRONG (clean captions, r=48, no prefix, 8 epochs)"
+echo "  Pixel-art STRONG (raw captions, KL=0, r=64, no prefix, 8 epochs)"
 echo "  Started: $(date)"
 echo "================================================================"
 
@@ -56,16 +59,15 @@ export HF_DATA_FILES="${HF_DATA_FILES:-2k_random_2k/train/0000.parquet}"
 export HF_IMAGE_COL="${HF_IMAGE_COL:-image}"
 export HF_TEXT_COL="${HF_TEXT_COL:-text}"
 
-# THE fixes
-export CLEAN_CAPTIONS="${CLEAN_CAPTIONS:-1}"
+# THE levers (raw captions; let the constant pixelation signal win)
+export CLEAN_CAPTIONS="${CLEAN_CAPTIONS:-0}"
 export CAPTION_PREFIX="${CAPTION_PREFIX:-}"          # empty -> force unconditional
 
-# Capacity / schedule (Naruto winning capacity + a touch more length)
-export LORA_RANK="${LORA_RANK:-48}"
-export LORA_ALPHA="${LORA_ALPHA:-96}"                # keep = 2 * rank
+export LORA_RANK="${LORA_RANK:-64}"
+export LORA_ALPHA="${LORA_ALPHA:-128}"               # keep = 2 * rank
 export LORA_DROPOUT="${LORA_DROPOUT:-0.1}"
 export TARGET_MODULES="${TARGET_MODULES:-q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj}"
-export KL_LAMBDA="${KL_LAMBDA:-0.5}"                 # Naruto learned unconditional at 0.5
+export KL_LAMBDA="${KL_LAMBDA:-0}"                   # 0 = stop pulling toward photoreal default
 export LR="${LR:-1e-4}"
 export EPOCHS="${EPOCHS:-8}"
 export LR_SCHEDULE="${LR_SCHEDULE:-cosine}"

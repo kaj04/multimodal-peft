@@ -65,20 +65,16 @@ STYLES = [
      "local_glob": "/scratch-shared/tesr125338/coco/val2017/*.jpg",
      "note": "natural photos (FAMILIAR control / floor)"},
 
-    {"name": "pixelart", "hf": "jainr3/diffusiondb-pixelart",
-     "config": "2k_random_2k", "split": "train", "image_col": "image",
-     "note": "DiffusionDB images pixelated post-hoc"},
-
+    # Art styles Janus already 'knows' (should sit only mildly above the floor).
     {"name": "naruto", "hf": "lambdalabs/naruto-blip-captions",
      "split": "train", "image_col": "image",
      "note": "anime (Naruto) frames"},
 
-    {"name": "ukiyoe", "hf": "KappaNeuro/ukiyo-e-art", "split": "train",
-     "note": "Japanese woodblock prints"},
-
-    {"name": "xray_medical", "hf": "keremberke/chest-xray-classification",
-     "config": "full", "split": "train",
-     "note": "chest X-rays (alien domain)"},
+    {"name": "pixelart", "hf": "jainr3/diffusiondb-pixelart",
+     "revision": "refs/convert/parquet",
+     "data_files": "2k_random_2k/train/0000.parquet",
+     "split": "train", "image_col": "image",
+     "note": "DiffusionDB pixelated"},
 ]
 
 

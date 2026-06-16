@@ -96,6 +96,17 @@ LR_SCHEDULE = os.environ.get("LR_SCHEDULE", "cosine").lower()
 # can also drop it to compare. Empty string disables prefixing.
 CAPTION_PREFIX = os.environ.get("CAPTION_PREFIX", "")
 
+# Caption cleaning. CLEAN_CAPTIONS=1 strips style/quality "buzz" clauses from
+# every caption (oil painting, 8k, trending on artstation, by <artist>,
+# pixel/8-bit, ...) so the captions describe only CONTENT. Rationale: on a
+# dataset whose captions FIGHT the target style (DiffusionDB prompts demand
+# photoreal detail while the images are pixel art), the competing style words
+# make the model gate the style on a trigger phrase. Removing them lets the
+# adapter attribute the visual style to ITSELF and apply it UNCONDITIONALLY
+# (the way the Naruto BLIP content-captions already did). Default off so
+# existing runs are unchanged.
+CLEAN_CAPTIONS = os.environ.get("CLEAN_CAPTIONS", "0") == "1"
+
 # AdamW betas. The Janus paper uses beta2=0.95 (default in transformers is 0.999).
 # Lower beta2 -> faster adaptation of the second-moment estimate, helps when
 # gradient variance is high (sparse CE signal over a 16k codebook).
@@ -217,6 +228,14 @@ def load_hf_image_caption_split():
             f"override HF_IMAGE_COL and HF_TEXT_COL")
     id2img = {i: ds[i][HF_IMAGE_COL] for i in range(len(ds))}
     refs   = {i: [ds[i][HF_TEXT_COL]] for i in range(len(ds))}
+    if CLEAN_CAPTIONS:
+        examples = [(refs[i][0], clean_caption(refs[i][0]))
+                    for i in range(min(6, len(ds)))]
+        refs = {i: [clean_caption(refs[i][0])] for i in refs}
+        print("  CLEAN_CAPTIONS=1 -> stripped style buzzwords. Examples:", flush=True)
+        for raw, cl in examples:
+            print(f"    RAW  : {raw[:100]}", flush=True)
+            print(f"    CLEAN: {cl[:100]}", flush=True)
     ids = list(range(len(ds)))
     random.Random(SEED).shuffle(ids)
     # Small dataset: reserve ~80 for eval, rest for training (capped at TRAIN_N).
@@ -422,6 +441,41 @@ def _apply_prefix(caption: str) -> str:
     if CAPTION_PREFIX:
         return CAPTION_PREFIX + caption
     return caption
+
+
+# Style/quality "buzz" markers. A comma-clause containing any of these is
+# dropped by clean_caption (used when CLEAN_CAPTIONS=1). Tuned for DiffusionDB
+# prompts. Extend via EXTRA_STYLE_MARKERS (comma-separated env).
+_STYLE_MARKERS = (
+    "by ", " style", "artstation", "deviantart", "behance", "pixiv", "trending",
+    "render", "octane", "unreal engine", "ray tracing", "raytracing",
+    "detailed", "intricate", "lighting", "photoreal", "hyperreal", "realistic",
+    "4k", "8k", "16k", "uhd", " hd", "resolution", "concept art",
+    "digital painting", "digital art", "masterpiece", "sharp focus", "bokeh",
+    "cinematic", "volumetric", "illustration", "painting", "watercolor",
+    "oil on", "oil painting", "acrylic", "charcoal", "sketch", "drawing",
+    "cgi", "vray", "redshift", "studio", "award", "highly", "ultra",
+    "pixel", "8-bit", "16-bit", "voxel", "sprite", "lowres", "low - res",
+    "smooth", "wallpaper",
+)
+_EXTRA_MARKERS = [m.strip().lower()
+                  for m in os.environ.get("EXTRA_STYLE_MARKERS", "").split(",")
+                  if m.strip()]
+if _EXTRA_MARKERS:
+    _STYLE_MARKERS = _STYLE_MARKERS + tuple(_EXTRA_MARKERS)
+
+
+def clean_caption(text: str) -> str:
+    """Keep only CONTENT clauses: split on commas (and '!!'), drop any clause
+    that looks like style/quality boilerplate, return the rest. Empty result
+    -> a neutral fallback so we never train on an empty prompt."""
+    if not isinstance(text, str):
+        return "an image"
+    clauses = [c.strip() for c in text.replace("!!", ",").split(",")]
+    kept = [c for c in clauses
+            if c and not any(m in c.lower() for m in _STYLE_MARKERS)]
+    out = ", ".join(kept).strip(" .,-!")
+    return out if len(out) >= 3 else "an image"
 
 
 # Fixed sampling prompts for the periodic sample dumps. Mix of WITH-prefix

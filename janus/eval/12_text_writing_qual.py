@@ -38,6 +38,17 @@ SEED     = int(os.environ.get("SEED", "42"))
 GEN_TOKENS  = int(os.environ.get("GEN_TOKENS", "70"))
 TEMPERATURE = float(os.environ.get("TEMPERATURE", "0.9"))
 TOP_P       = float(os.environ.get("TOP_P", "0.95"))
+REP_PENALTY = float(os.environ.get("REP_PENALTY", "1.3"))
+
+# Poetic priming for INCIPITS only (not neutral probes): a generic verse
+# couplet biases the unified model into continuing a POEM rather than slipping
+# into its chat/assistant persona ("Hello, I am..."), the main artifact in
+# run 1. Same priming for base and adapter so the comparison stays fair; it is
+# context only -> we decode/show just the continuation after the incipit.
+POEM_PRIMER = os.environ.get(
+    "POEM_PRIMER",
+    "O sing, my soul, and let the verses flow,\n"
+    "of things that were, and things we cannot know.\n")
 
 OUTPUT_DIR = Path(os.environ.get(
     "JANUS_OUTPUT_DIR",
@@ -68,12 +79,25 @@ def _logits(model, ids):
     return out.logits if hasattr(out, "logits") else out[0]
 
 
+def _rep_penalty(logits, seq_ids, penalty):
+    """HF-style repetition penalty on a (V,) logit vector for tokens already in
+    seq_ids. Kills the greedy looping seen in run 1."""
+    if penalty == 1.0:
+        return logits
+    uniq = torch.unique(seq_ids)
+    vals = logits[uniq]
+    logits = logits.clone()
+    logits[uniq] = torch.where(vals > 0, vals / penalty, vals * penalty)
+    return logits
+
+
 @torch.no_grad()
 def greedy(model, tok, prompt, n):
     ids = tok(prompt, return_tensors="pt")["input_ids"].to(model.device)
     start = ids.shape[1]
     for _ in range(n):
-        nxt = int(torch.argmax(_logits(model, ids)[0, -1]).item())
+        logits = _rep_penalty(_logits(model, ids)[0, -1].float(), ids[0], REP_PENALTY)
+        nxt = int(torch.argmax(logits).item())
         ids = torch.cat([ids, torch.tensor([[nxt]], device=ids.device)], 1)
         if tok.eos_token_id is not None and nxt == tok.eos_token_id:
             break
@@ -86,7 +110,8 @@ def sample(model, tok, prompt, n, temperature, top_p, seed):
     ids = tok(prompt, return_tensors="pt")["input_ids"].to(model.device)
     start = ids.shape[1]
     for _ in range(n):
-        logits = _logits(model, ids)[0, -1].float() / max(1e-6, temperature)
+        logits = _rep_penalty(_logits(model, ids)[0, -1].float(), ids[0], REP_PENALTY)
+        logits = logits / max(1e-6, temperature)
         probs = F.softmax(logits, dim=-1)
         sp, si = torch.sort(probs, descending=True)
         keep = torch.cumsum(sp, dim=-1) <= top_p
@@ -100,17 +125,20 @@ def sample(model, tok, prompt, n, temperature, top_p, seed):
 
 
 def _both(model, tok, prompt, kind):
-    """Return dict with base/adapter greedy + sampled for one prompt."""
+    """Return dict with base/adapter greedy + sampled for one prompt. Incipits
+    get the poem primer (hidden context); neutral probes stay bare."""
+    primer = POEM_PRIMER if kind == "incipit" else ""
+    full = primer + prompt
     seed = SEED + (sum(ord(c) for c in prompt) % 1000)   # deterministic
-    out = {"prompt": prompt, "kind": kind}
+    out = {"prompt": prompt, "kind": kind, "primed": bool(primer)}
     # adapter on
-    out["adapter_greedy"] = greedy(model, tok, prompt, GEN_TOKENS)
-    out["adapter_sample"] = sample(model, tok, prompt, GEN_TOKENS,
+    out["adapter_greedy"] = greedy(model, tok, full, GEN_TOKENS)
+    out["adapter_sample"] = sample(model, tok, full, GEN_TOKENS,
                                    TEMPERATURE, TOP_P, seed)
     # adapter off (base)
     with model.disable_adapter():
-        out["base_greedy"] = greedy(model, tok, prompt, GEN_TOKENS)
-        out["base_sample"] = sample(model, tok, prompt, GEN_TOKENS,
+        out["base_greedy"] = greedy(model, tok, full, GEN_TOKENS)
+        out["base_sample"] = sample(model, tok, full, GEN_TOKENS,
                                     TEMPERATURE, TOP_P, seed)
     return out
 
@@ -153,13 +181,15 @@ def main():
 
     header = (f"{SEP}\nWRITING QUALITATIVE  adapter={ADAPTER}\n"
               f"greedy + sample(T={TEMPERATURE}, top_p={TOP_P}), "
-              f"{GEN_TOKENS} tokens\n{SEP}\n")
+              f"{GEN_TOKENS} tokens, rep_penalty={REP_PENALTY}\n"
+              f"incipits are poem-primed (context hidden); neutral probes bare\n{SEP}\n")
     (OUTPUT_DIR / "writing_qual.txt").write_text(
         header + "".join(_fmt(r) for r in records), encoding="utf-8")
     (OUTPUT_DIR / "writing_qual.json").write_text(
         json.dumps({"model": MODEL_ID, "adapter": ADAPTER,
                     "temperature": TEMPERATURE, "top_p": TOP_P,
-                    "gen_tokens": GEN_TOKENS, "records": records}, indent=2),
+                    "gen_tokens": GEN_TOKENS, "rep_penalty": REP_PENALTY,
+                    "poem_primer": POEM_PRIMER, "records": records}, indent=2),
         encoding="utf-8")
     print(f"\n  saved -> {OUTPUT_DIR}/writing_qual.txt (+ .json)")
 

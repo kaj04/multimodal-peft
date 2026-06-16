@@ -21,8 +21,9 @@
 #    - the pixelation is crisp + strong (palette-reduced) -> bigger weight
 #      shift, and PIXELART_SIZE/COLORS are a controllable distance dial.
 #    - no duplicates; we have COCO on scratch already.
-#  We train on train2017 so val2017 stays clean for the POPE understanding
-#  probe in the forgetting battery.
+#  Prefer train2017 (keeps val2017 clean for the POPE probe); if its captions
+#  are not on scratch, fall back to COCO_SPLIT=val2017 (minor POPE overlap,
+#  fixable later by excluding POPE ids or fetching captions_train2017.json).
 #
 #  Config = Naruto winning recipe (r=48, KL=0.5, no prefix), which learned an
 #  unconditional style from clean captions. SUCCESS: 05c "Adapter | plain" is
@@ -33,7 +34,7 @@
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
 
 echo "================================================================"
-echo "  Pixel-art on COCO (synthesized) | r=48 KL=0.5 train2017"
+echo "  Pixel-art on COCO (synthesized) | r=48 KL=0.5  split=${COCO_SPLIT:-val2017}"
 echo "  Started: $(date)"
 echo "================================================================"
 
@@ -49,7 +50,7 @@ export RUN_NAME="${RUN_NAME:-gen_7b_pixelart_coco}"
 
 # Data: COCO train2017 + on-the-fly pixel-art transform of the target image.
 export DATASET_SOURCE="${DATASET_SOURCE:-coco}"
-export COCO_SPLIT="${COCO_SPLIT:-train2017}"
+export COCO_SPLIT="${COCO_SPLIT:-val2017}"        # train2017 captions absent on scratch
 export IMAGE_TRANSFORM="${IMAGE_TRANSFORM:-pixelart}"
 export PIXELART_SIZE="${PIXELART_SIZE:-48}"
 export PIXELART_COLORS="${PIXELART_COLORS:-24}"
@@ -74,14 +75,16 @@ export GRAD_CLIP="1.0"
 export RECON_LOSS_WEIGHT="0.0"
 
 # Eval / sampling: neutral prefix-free prompts -> live test of UNCONDITIONAL style
-export EVAL_EVERY_STEPS="50"
-export EVAL_MID_N="10"
-export GEN_EVAL_N="20"
-export EVAL_N="80"
-export TRAIN_N="4000"
-export SAMPLE_EVERY_STEPS="100"
-export N_SAMPLE_PROMPTS="4"
-export SAMPLE_PROMPTS="a cat;a castle on a hill;a portrait of a man;a sailboat on the sea"
+# Overridable (use ${VAR:-default} so an sbatch --export wins, e.g. a smoke
+# with TRAIN_N=40 EPOCHS=1 -- the previous hard exports silently ignored those).
+export EVAL_EVERY_STEPS="${EVAL_EVERY_STEPS:-50}"
+export EVAL_MID_N="${EVAL_MID_N:-10}"
+export GEN_EVAL_N="${GEN_EVAL_N:-20}"
+export EVAL_N="${EVAL_N:-80}"
+export TRAIN_N="${TRAIN_N:-4000}"
+export SAMPLE_EVERY_STEPS="${SAMPLE_EVERY_STEPS:-100}"
+export N_SAMPLE_PROMPTS="${N_SAMPLE_PROMPTS:-4}"
+export SAMPLE_PROMPTS="${SAMPLE_PROMPTS:-a cat;a castle on a hill;a portrait of a man;a sailboat on the sea}"
 
 export RESUME="${RESUME:-1}"
 export SAVE_EVERY_STEPS="200"

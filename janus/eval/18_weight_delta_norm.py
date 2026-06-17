@@ -103,7 +103,9 @@ def base_norms(mods):
         for mod, bk in want.items():
             if bk in idx:
                 by_shard.setdefault(idx[bk], {})[bk] = mod
-        for shard, keys in by_shard.items():
+        for si, (shard, keys) in enumerate(sorted(by_shard.items()), 1):
+            print(f"    shard {si}/{len(by_shard)}: {shard} "
+                  f"({len(keys)} tensors)", flush=True)
             p = hf_hub_download(MODEL_ID, shard, local_files_only=True)
             with safe_open(p, framework="pt") as f:
                 for bk, mod in keys.items():
@@ -176,10 +178,13 @@ def main():
     # base norms once (union of all modules)
     all_mods = set()
     per_adapter = {}
-    for n, p in avail:
+    for i, (n, p) in enumerate(avail, 1):
         d, r, alpha = adapter_deltas(p)
         per_adapter[n] = (d, r, alpha)
         all_mods |= set(d.keys())
+        print(f"  [{i}/{len(avail)}] read adapter {n} ({len(d)} modules)", flush=True)
+    print(f"  computing base ||W|| over {len(all_mods)} modules "
+          f"(reading cached shards)...", flush=True)
     bn = base_norms(all_mods)
     print(f"  base ||W|| matched for {len(bn)}/{len(all_mods)} modules\n", flush=True)
 

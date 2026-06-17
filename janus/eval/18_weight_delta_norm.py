@@ -192,7 +192,10 @@ def main():
             rel = {m: d[m] / bn[m] for m in d if m in bn and bn[m] > 0}
             rel_tot = tot_dw / tot_w if tot_w > 0 else float("nan")
             mean_rel = float(np.mean(list(rel.values()))) if rel else float("nan")
-            heatmap(rel, n)
+            try:
+                heatmap(rel, n)
+            except Exception as e:
+                print(f"    (heatmap skipped: {type(e).__name__}: {e})", flush=True)
         else:
             rel_tot, mean_rel = float("nan"), float("nan")
         summary[n] = {"r": r, "alpha": alpha, "abs_dw": tot_dw,

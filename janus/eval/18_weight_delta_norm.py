@@ -97,13 +97,14 @@ def base_norms(mods):
     norms = {}
     try:
         idx = json.loads(Path(hf_hub_download(
-            MODEL_ID, "model.safetensors.index.json")).read_text())["weight_map"]
+            MODEL_ID, "model.safetensors.index.json",
+            local_files_only=True)).read_text())["weight_map"]
         by_shard = {}
         for mod, bk in want.items():
             if bk in idx:
                 by_shard.setdefault(idx[bk], {})[bk] = mod
         for shard, keys in by_shard.items():
-            p = hf_hub_download(MODEL_ID, shard)
+            p = hf_hub_download(MODEL_ID, shard, local_files_only=True)
             with safe_open(p, framework="pt") as f:
                 for bk, mod in keys.items():
                     norms[mod] = float(f.get_tensor(bk).float().norm())
@@ -111,7 +112,7 @@ def base_norms(mods):
         print(f"  (sharded base read failed: {type(e).__name__}: {e}; "
               f"trying single file)", flush=True)
         try:
-            p = hf_hub_download(MODEL_ID, "model.safetensors")
+            p = hf_hub_download(MODEL_ID, "model.safetensors", local_files_only=True)
             with safe_open(p, framework="pt") as f:
                 avail = set(f.keys())
                 for mod, bk in want.items():

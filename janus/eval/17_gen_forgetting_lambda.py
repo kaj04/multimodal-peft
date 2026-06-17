@@ -168,10 +168,15 @@ def main():
     base = JanusForConditionalGeneration.from_pretrained(
         MODEL_ID, torch_dtype=torch.bfloat16).to("cuda")
     base.eval()
+    # PEFT adapter names become nn.Module keys, which cannot contain a dot,
+    # so sanitize (kl0.25 -> kl0_25) for the in-memory name while keeping the
+    # original name for output folders and the report.
+    def _pn(s):
+        return s.replace(".", "_")
     n0, p0 = avail[0]
-    model = PeftModel.from_pretrained(base, p0, adapter_name=n0)
+    model = PeftModel.from_pretrained(base, p0, adapter_name=_pn(n0))
     for n, p in avail[1:]:
-        model.load_adapter(p, adapter_name=n)
+        model.load_adapter(p, adapter_name=_pn(n))
     model.eval()
 
     base_dir = OUT_ROOT / "base"
@@ -186,7 +191,7 @@ def main():
         adir = OUT_ROOT / n
         print(f"  generating adapter set {n}...", flush=True)
         a_imgs = gen_set(model, processor, prompts, adir,
-                         with_adapter=True, adapter_name=n)
+                         with_adapter=True, adapter_name=_pn(n))
         val, sigma = cmmd(clip, cproc, a_imgs, base_imgs)
         kid = kid_folders(adir, base_dir)
         rows.append({"name": n, "cmmd_vs_base": val, "kid_vs_base": kid,

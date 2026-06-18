@@ -30,6 +30,8 @@ A=""
 for r in 2 4 8 16 32 64; do A="$A;img_r$r=$O/gen_7b_rank_r$r/adapter_best"; done
 for kl in 0 025 1 15; do A="$A;img_kl$kl=$O/gen_7b_kl${kl}_r32/adapter_best"; done
 A="$A;img_v5=$O/gen_7b_naruto_v5/adapter_best"
+# Regularizer ablation (r32): L2-SP and logit-MSE alternatives to KL (skipped if absent)
+A="$A;img_l2=$O/gen_7b_l2_r32/adapter_best;img_mse=$O/gen_7b_mse_r32/adapter_best"
 for r in 4 8 16 32 64; do A="$A;text_r$r=$O/text_poetry_r${r}_kl0.5/adapter_best"; done
 for kl in 0 0.25 1 1.5; do A="$A;text_kl$(echo $kl|tr -d '.')=$O/text_poetry_r16_kl${kl}/adapter_best"; done
 export ADAPTERS="${A#;}"

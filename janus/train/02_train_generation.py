@@ -155,6 +155,12 @@ RECON_LOSS_WEIGHT = float(os.environ.get("RECON_LOSS_WEIGHT", "0.0"))
 # in [0.1, 1.0] is a sensible starting range -- start with 0.5.
 KL_LAMBDA = float(os.environ.get("KL_LAMBDA", "0.0"))
 
+# Which regularizer the KL_LAMBDA weight applies to (regularizer ablation):
+#   "kl"  -> KL(p_adapter || p_base) on the output distribution (default)
+#   "mse" -> MSE between adapter and base logits (output space, no softmax)
+#   "l2"  -> L2 on the LoRA parameters (weight decay toward the base; no base fwd)
+REG_TYPE = os.environ.get("REG_TYPE", "kl").lower()
+
 # LR schedule + optimisation
 WARMUP_RATIO  = float(os.environ.get("WARMUP_RATIO", "0.05"))   # 5% linear warmup
 WEIGHT_DECAY  = float(os.environ.get("WEIGHT_DECAY", "0.0"))    # 0 on LoRA is standard
@@ -301,6 +307,7 @@ def _find_vq_codebook(vqmodel):
 def generation_loss(base, processor, image, caption,
                     recon_weight: float = 0.0,
                     kl_weight: float = 0.0,
+                    reg_type: str = "kl",
                     peft_model=None):
     """One text->image teacher-forced step.
 
@@ -374,26 +381,33 @@ def generation_loss(base, processor, image, caption,
         total = total + recon_weight * recon
         recon_item = recon.detach().item()
 
-    # --- Optional KL-to-base regularizer ---
-    # We replay the SAME transformer call with the LoRA adapter disabled
-    # (peft_model.disable_adapter() context manager) under no_grad, then
-    # compute per-position KL averaged over the image-token positions.
+    # --- Optional stay-close-to-base regularizer (weight kl_weight) ---
+    # reg_type selects the divergence:
+    #   "l2"  -> L2 on the LoRA parameters (weight decay toward the base); no
+    #            base forward needed, so it is free.
+    #   "mse" -> MSE between adapter and base logits (output space).
+    #   "kl"  -> KL(p_adapter || p_base) on the output distribution (default).
+    # The "mse"/"kl" variants replay the SAME transformer call with the LoRA
+    # adapter disabled (no_grad) to get the base distribution (~2x fwd cost).
     if kl_weight > 0.0 and peft_model is not None:
-        with peft_model.disable_adapter():
-            with torch.no_grad():
-                hidden_b = inner(inputs_embeds=inputs_embeds).last_hidden_state
-                img_hidden_b = hidden_b[:, Lt - 1:, :]
-                logits_b = inner.generation_head(img_hidden_b).float()
-
-        # KL(p_adapter || p_base) per position, then mean over positions.
-        # Implemented manually for clarity (the F.kl_div sign convention is
-        # easy to get wrong here).
-        log_p_a = F.log_softmax(logits_f, dim=-1)          # (1, n_img, V)
-        log_p_b = F.log_softmax(logits_b, dim=-1)
-        kl_per_pos = (log_p_a.exp() * (log_p_a - log_p_b)).sum(dim=-1)  # (1, n_img)
-        kl = kl_per_pos.mean()
-        total = total + kl_weight * kl
-        kl_item = kl.detach().item()
+        if reg_type == "l2":
+            reg = sum(p.float().pow(2).sum()
+                      for n, p in peft_model.named_parameters()
+                      if p.requires_grad and ("lora_A" in n or "lora_B" in n))
+        else:
+            with peft_model.disable_adapter():
+                with torch.no_grad():
+                    hidden_b = inner(inputs_embeds=inputs_embeds).last_hidden_state
+                    img_hidden_b = hidden_b[:, Lt - 1:, :]
+                    logits_b = inner.generation_head(img_hidden_b).float()
+            if reg_type == "mse":
+                reg = F.mse_loss(logits_f, logits_b)
+            else:  # "kl": per-position KL(p_adapter || p_base), mean over positions
+                log_p_a = F.log_softmax(logits_f, dim=-1)   # (1, n_img, V)
+                log_p_b = F.log_softmax(logits_b, dim=-1)
+                reg = (log_p_a.exp() * (log_p_a - log_p_b)).sum(dim=-1).mean()
+        total = total + kl_weight * reg
+        kl_item = float(reg.detach().item())
 
     return total, ce.detach().item(), recon_item, kl_item
 
@@ -621,8 +635,8 @@ def main():
     print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
           f"warmup={WARMUP_RATIO} grad_clip={GRAD_CLIP}")
     print(f"  recon_loss_weight={RECON_LOSS_WEIGHT}  (0 = plain CE, Anole uses ~0.5)")
-    print(f"  kl_lambda={KL_LAMBDA}  (0 = no KL reg; >0 enables KL(p_adapter || p_base) "
-          f"-> doubles transformer fwd cost)")
+    print(f"  kl_lambda={KL_LAMBDA}  (0 = no reg; >0 enables the reg_type regularizer)")
+    print(f"  reg_type={REG_TYPE}  (kl | mse | l2; kl/mse double the fwd cost, l2 is free)")
     print(f"  dataset_source={DATASET_SOURCE}  lr_schedule={LR_SCHEDULE}")
     print(f"  caption_prefix={CAPTION_PREFIX!r}")
     print(f"  adam_betas=({ADAM_BETA1}, {ADAM_BETA2})")
@@ -706,10 +720,11 @@ def main():
         "schedule": f"linear_warmup_{LR_SCHEDULE}",
         "recon_loss_weight": RECON_LOSS_WEIGHT,
         "kl_lambda":         KL_LAMBDA,
+        "reg_type":          REG_TYPE,
         "loss_type": "+".join(
             ["ce"]
-            + (["recon"] if RECON_LOSS_WEIGHT > 0 else [])
-            + (["kl"]    if KL_LAMBDA         > 0 else [])
+            + (["recon"]   if RECON_LOSS_WEIGHT > 0 else [])
+            + ([REG_TYPE]  if KL_LAMBDA         > 0 else [])
         ),
         "dataset_source": DATASET_SOURCE,
         "lr_schedule": LR_SCHEDULE,
@@ -759,6 +774,7 @@ def main():
                 base, processor, image, _apply_prefix(refs[img_id][0]),
                 recon_weight=RECON_LOSS_WEIGHT,
                 kl_weight=KL_LAMBDA,
+                reg_type=REG_TYPE,
                 peft_model=peft_model)
             (loss / GRAD_ACCUM).backward()
             running       += loss.item()

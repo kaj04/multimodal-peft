@@ -46,6 +46,14 @@ import numpy as np
 import torch
 from PIL import Image
 
+# HPC terminals often default to a non-UTF-8 locale (C/ASCII), which makes
+# input() crash on accented characters. Force UTF-8 on the I/O streams.
+for _stream in (sys.stdin, sys.stdout):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 MODEL_ID = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-7B")
 ADAPTER  = os.environ.get("ADAPTER", "").strip()
 OUT_DIR  = Path(os.environ.get(

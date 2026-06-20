@@ -32,10 +32,19 @@ Anything else = the question, answered by base / poetry / naruto.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import torch
 from PIL import Image
+
+# HPC terminals often default to a non-UTF-8 locale (C/ASCII), which makes
+# input() crash on accented characters. Force UTF-8 on the I/O streams.
+for _stream in (sys.stdin, sys.stdout):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 MODEL_ID = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-7B")
 TRAIN    = Path(os.path.expanduser("~/multimodal-peft/janus/train/output"))

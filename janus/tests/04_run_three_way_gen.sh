@@ -23,7 +23,12 @@ export HF_HOME=/scratch-shared/tesr125338/hf_cache
 JANUS_PY=$HOME/.conda/envs/janus/bin/python
 
 # Default prompt set (Francesco's 9 validation prompts). Overridable via --export.
-export PROMPTS="${PROMPTS:-a clock on a desk between a red pen on the right and a black pen on the left;an Italian grandmother in traditional clothes cooking sushi in her home;a photo of a child at home sitting on a couch while watching a Japanese anime;a fine-dining dish of salmon on a bed of vegetables;a happy girl in a park with peacocks chasing each other in the background;a photo for an advertisement of a canned energy drink called Bullit with the iconic image of Leonardo da Vinci's Vitruvian Man on it;a super detailed portrait photo of an elderly man biting into a bruschetta with fresh tomato, all messy with tomato around his mouth;a famous hyperrealistic painting like the Mona Lisa but with a mustache;an image of a cartoon where two characters fighting in a ring}"
+# NB: assigned in an `if`, NOT via ${PROMPTS:-default}, because an apostrophe in
+# the default (e.g. "Vinci's") breaks bash quote parsing inside ${...:-...}.
+if [ -z "${PROMPTS:-}" ]; then
+  PROMPTS="a clock on a desk between a red pen on the right and a black pen on the left;an Italian grandmother in traditional clothes cooking sushi in her home;a photo of a child at home sitting on a couch while watching a Japanese anime;a fine-dining dish of salmon on a bed of vegetables;a happy girl in a park with peacocks chasing each other in the background;a photo for an advertisement of a canned energy drink called Bullit with the iconic image of Leonardo da Vinci's Vitruvian Man on it;a super detailed portrait photo of an elderly man biting into a bruschetta with fresh tomato, all messy with tomato around his mouth;a famous hyperrealistic painting like the Mona Lisa but with a mustache;an image of a cartoon where two characters fighting in a ring"
+fi
+export PROMPTS
 
 echo "================================================================"
 echo "  3-way generation | Started: $(date)"

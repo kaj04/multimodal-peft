@@ -333,8 +333,8 @@ def metric_clip_iqa(gen_imgs):
 
 
 def metric_clip_dirsim(before_imgs, after_imgs,
-                       text_source="a photograph of a person",
-                       text_target="an anime sprite in Naruto style"):
+                       text_source=os.environ.get("DIRSIM_SOURCE", "a photograph of a person"),
+                       text_target=os.environ.get("STYLE_TEXT", "an anime sprite in Naruto style")):
     """CLIP Directional Similarity (Gal et al. 2022, StyleGAN-NADA paper):
     cosine similarity between the image-edit direction and the text-edit
     direction. High value = the adapter is moving images in the SEMANTIC

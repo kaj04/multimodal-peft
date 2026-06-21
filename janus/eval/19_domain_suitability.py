@@ -121,21 +121,24 @@ def _pick_text_col(sample_rows, preferred):
 
 
 def collect_text(spec, target_chars, rng):
-    """Contiguous span from a random offset (preserves natural reading order)."""
+    """Stream a corpus from the start until target_chars are gathered. Streaming
+    avoids downloading multi-GB datasets just to score ~120k chars; for these
+    domain corpora there is no Gutenberg-style front-matter to skip, so reading
+    from the start is fine."""
     from datasets import load_dataset
     args = [spec["hf"]] + ([spec["config"]] if spec.get("config") else [])
-    kw = {"split": spec.get("split", "train")}
+    kw = {"split": spec.get("split", "train"), "streaming": True}
     if spec.get("revision"):
         kw["revision"] = spec["revision"]
     ds = load_dataset(*args, **kw)
-    n = len(ds)
-    col = _pick_text_col([ds[i] for i in range(min(50, n))], spec.get("text_col"))
+    it = iter(ds)
+    first = next(it)
+    col = _pick_text_col([first], spec.get("text_col"))
     if col is None:
         raise ValueError("no string column found")
-    start = rng.randrange(n)
     buf, nchars = [], 0
-    for j in range(n):
-        t = ds[(start + j) % n][col]
+    for row in [first, *it]:
+        t = row.get(col)
         if isinstance(t, str) and t.strip():
             buf.append(t.strip())
             nchars += len(t)

@@ -77,8 +77,7 @@ DOMAINS = [
      "subjects": ["professional_accounting", "econometrics",
                   "high_school_macroeconomics", "high_school_microeconomics"]},
     {"name": "math",
-     "corpus": {"hf": "open-web-math/open-web-math", "split": "train",
-                "text_col": "text"},
+     "corpus": {"hf": "openai/gsm8k", "config": "main", "split": "train"},
      "subjects": ["college_mathematics", "abstract_algebra",
                   "high_school_mathematics", "elementary_mathematics"]},
 ]
@@ -231,25 +230,28 @@ def main():
     rows = []
     for d in DOMAINS:
         name = d["name"]
-        # PPL
-        xctrl, ppl = None, None
-        if d.get("corpus"):
-            try:
-                txt, col = collect_text(d["corpus"], target_chars, rng)
-                ppl = corpus_ppl(model, tok, txt)
-                xctrl = ppl / ctrl_ppl if (ppl and ctrl_ppl) else None
-            except Exception as e:
-                print(f"  [{name}] corpus PPL SKIP: {type(e).__name__}: {e}", flush=True)
-        # MMLU
-        t0 = time.time()
-        acc, nq, per = subject_accuracy(model, tok, mmlu_ds, by_subject,
-                                        d["subjects"], rng)
+        xctrl = ppl = acc = per = None
+        nq = 0
+        try:
+            if d.get("corpus"):
+                try:
+                    txt, _ = collect_text(d["corpus"], target_chars, rng)
+                    ppl = corpus_ppl(model, tok, txt)
+                    xctrl = ppl / ctrl_ppl if (ppl and ctrl_ppl) else None
+                except Exception as e:
+                    print(f"  [{name}] corpus PPL SKIP: {type(e).__name__}: {e}",
+                          flush=True)
+            t0 = time.time()
+            acc, nq, per = subject_accuracy(model, tok, mmlu_ds, by_subject,
+                                            d["subjects"], rng)
+            print(f"  [{name}] xControl={xctrl if xctrl is None else round(xctrl,2)}  "
+                  f"MMLU_acc={acc if acc is None else round(acc,3)} (n={nq})  "
+                  f"({time.time()-t0:.0f}s)", flush=True)
+        except Exception as e:
+            print(f"  [{name}] DOMAIN FAILED: {type(e).__name__}: {e}", flush=True)
         rows.append({"domain": name, "ppl": ppl, "xcontrol": xctrl,
                      "mmlu_acc": acc, "mmlu_n": nq, "per_subject": per,
-                     "corpus": (d["corpus"] or {}).get("hf")})
-        print(f"  [{name}] xControl={xctrl if xctrl is None else round(xctrl,2)}  "
-              f"MMLU_acc={acc if acc is None else round(acc,3)} (n={nq})  "
-              f"({time.time()-t0:.0f}s)", flush=True)
+                     "corpus": (d.get("corpus") or {}).get("hf")})
 
     # --- report ---
     lines = [SEP, f"DOMAIN SUITABILITY  model={MODEL_ID}  (control PPL={ctrl_ppl:.2f})",

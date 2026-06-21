@@ -76,9 +76,9 @@ DOMAINS = [
                 "split": "train", "text_col": "sentence"},
      "subjects": ["professional_accounting", "econometrics",
                   "high_school_macroeconomics", "high_school_microeconomics"]},
-    # math is a useful sanity floor: the base is very weak here (college_math ~0.1)
     {"name": "math",
-     "corpus": None,
+     "corpus": {"hf": "open-web-math/open-web-math", "split": "train",
+                "text_col": "text"},
      "subjects": ["college_mathematics", "abstract_algebra",
                   "high_school_mathematics", "elementary_mathematics"]},
 ]

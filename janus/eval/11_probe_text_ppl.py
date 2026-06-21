@@ -95,6 +95,14 @@ STYLES = [
     {"name": "legalese", "hf": "mteb/legal_summarization",
      "config": "corpus", "split": "corpus", "text_col": "text",
      "note": "legal contracts / terms-of-service: dense legalese register"},
+
+    {"name": "python_code", "hf": "codeparrot/codeparrot-clean-valid",
+     "split": "train", "text_col": "content",
+     "note": "Python source code: does the base already model code well?"},
+
+    {"name": "pubmed_medical", "hf": "ccdv/pubmed-summarization",
+     "split": "train", "text_col": "article",
+     "note": "biomedical research articles (PubMed): clinical/scientific register"},
 ]
 
 

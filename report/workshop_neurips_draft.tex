@@ -255,8 +255,8 @@ no-forgetting result of Table~\ref{tab:rank} on a second dataset.
 
 This replication also surfaces a second finding: \emph{the PEFT configuration is
 dataset-dependent}. The recipe that saturates a high-frequency, colour-saturated
-style (Naruto) only partially imprints the sparse, low-frequency sketch style.
-The per-prompt edit strength is about half (CLIP DirSim $0.086$, versus
+style (Naruto) only partially imprints the sparse, low-frequency sketch style
+(Appendix Figure~\ref{fig:sketch}). The per-prompt edit strength is about half (CLIP DirSim $0.086$, versus
 $\approx0.15$ for Naruto at the same $\lambda$); it carries a measurable
 image-quality cost (CLIP-IQA $0.747\!\to\!0.592$); and the interference
 footprint, while small, is uniformly larger than Naruto's and most visible on MME
@@ -313,28 +313,6 @@ dataset-dependent. FID/ArtFID are omitted (numerically unstable at $n{=}80$).}
 \caption{Style acquisition on two held-out prompts. Full grids in
 Appendix~\ref{app:grids}.}
 \label{fig:teaser}
-\end{figure}
-
-\begin{figure}[!t]
-\centering
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/base_zebra.png}
-\caption*{Base}\end{subfigure}\hfill
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/adapter_zebra.png}
-\caption*{Sketch LoRA}\end{subfigure}\hfill
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/base_kite.png}
-\caption*{Base}\end{subfigure}\hfill
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/adapter_kite.png}
-\caption*{Sketch LoRA}\end{subfigure}
-\caption{Generalisation to line-sketch scenes (temporary samples, same
-prompt/seed base vs.\ adapter). The style transfers for some prompts (left pair:
-white canvas, ink linework) but only partially for others (right pair: sketch
-strokes appear yet photographic colour persists), consistent with the weaker,
-dataset-dependent acquisition in Table~\ref{tab:sketch}.}
-\label{fig:sketch}
 \end{figure}
 
 \subsection{Text direction}
@@ -712,6 +690,28 @@ unaffected.}
 
 \section{Qualitative grids}
 \label{app:grids}
+
+\begin{figure}[!t]
+\centering
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/base_zebra.png}
+\caption*{Base}\end{subfigure}\hfill
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/adapter_zebra.png}
+\caption*{Sketch LoRA}\end{subfigure}\hfill
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/base_kite.png}
+\caption*{Base}\end{subfigure}\hfill
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/adapter_kite.png}
+\caption*{Sketch LoRA}\end{subfigure}
+\caption{Generalisation to line-sketch scenes (temporary samples, same
+prompt/seed base vs.\ adapter). The style transfers for some prompts (left pair:
+white canvas, ink linework) but only partially for others (right pair: sketch
+strokes appear yet photographic colour persists), consistent with the weaker,
+dataset-dependent acquisition in Table~\ref{tab:sketch}.}
+\label{fig:sketch}
+\end{figure}
 
 \begin{figure*}[p]
 \centering

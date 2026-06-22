@@ -36,6 +36,8 @@ import torch
 import torch.nn.functional as F
 
 MODEL_ID = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-7B")
+ADAPTER  = os.environ.get("ADAPTER", "")            # empty -> base; set -> "after"
+DOMAINS_FILTER = os.environ.get("DOMAINS_FILTER", "")  # comma list, e.g. "medicine"
 SEED     = int(os.environ.get("SEED", "42"))
 WINDOW_TOKENS    = int(os.environ.get("WINDOW_TOKENS", "512"))
 MAX_WINDOWS      = int(os.environ.get("MAX_WINDOWS", "40"))
@@ -98,6 +100,11 @@ def load_model():
     base = JanusForConditionalGeneration.from_pretrained(
         MODEL_ID, torch_dtype=torch.bfloat16).to("cuda")
     base.eval()
+    if ADAPTER:
+        from peft import PeftModel
+        base = PeftModel.from_pretrained(base, ADAPTER)
+        base.eval()
+        print(f"  loaded adapter: {ADAPTER}", flush=True)
     return base, processor
 
 
@@ -205,8 +212,12 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     rng = random.Random(SEED)
     target_chars = WINDOW_TOKENS * MAX_WINDOWS * 6
+    tag = "base" if not ADAPTER else Path(ADAPTER).parent.name
+    domains = [d for d in DOMAINS
+               if (not DOMAINS_FILTER or d["name"] in DOMAINS_FILTER.split(","))]
     print(SEP)
-    print(f"  Domain suitability (base-only) | MODEL={MODEL_ID}")
+    print(f"  Domain suitability | tag={tag} | MODEL={MODEL_ID}")
+    print(f"  adapter={ADAPTER or '<base>'} | domains={[d['name'] for d in domains]}")
     print(f"  PPL budget {MAX_WINDOWS}x{WINDOW_TOKENS} tok | MMLU {MMLU_PER_SUBJECT}/subject")
     print(SEP, flush=True)
 
@@ -228,7 +239,7 @@ def main():
         by_subject[row["subject"]].append(i)
 
     rows = []
-    for d in DOMAINS:
+    for d in domains:
         name = d["name"]
         xctrl = ppl = acc = per = None
         nq = 0
@@ -280,11 +291,12 @@ def main():
     report = "\n".join(lines)
     print("\n" + report, flush=True)
 
-    (OUTPUT_DIR / "domain_suitability.txt").write_text(report + "\n", encoding="utf-8")
-    (OUTPUT_DIR / "domain_suitability.json").write_text(
-        json.dumps({"model": MODEL_ID, "control_ppl": ctrl_ppl, "domains": rows},
+    (OUTPUT_DIR / f"domain_suitability_{tag}.txt").write_text(report + "\n", encoding="utf-8")
+    (OUTPUT_DIR / f"domain_suitability_{tag}.json").write_text(
+        json.dumps({"model": MODEL_ID, "adapter": ADAPTER or None, "tag": tag,
+                    "control_ppl": ctrl_ppl, "domains": rows},
                    indent=2), encoding="utf-8")
-    print(f"\n  saved -> {OUTPUT_DIR}/domain_suitability.txt (+ .json)")
+    print(f"\n  saved -> {OUTPUT_DIR}/domain_suitability_{tag}.txt (+ .json)")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,8 @@ HF_DATASET_NAME = os.environ.get("HF_DATASET_NAME", "biglam/gutenberg-poetry-cor
 HF_SPLIT        = os.environ.get("HF_SPLIT", "train")
 LINE_COL        = os.environ.get("LINE_COL", "line")
 DOC_ID_COL      = os.environ.get("DOC_ID_COL", "gutenberg_id")
+DOC_MODE        = os.environ.get("DOC_MODE", "lines")   # "lines" (poetry) | "rows" (one doc per row)
+TEXT_COL        = os.environ.get("HF_TEXT_COL", "")      # rows mode: text column (auto-detect if empty)
 
 # Document construction
 SKIP_HEAD_LINES = int(os.environ.get("SKIP_HEAD_LINES", "30"))   # drop per-book front-matter
@@ -161,6 +163,27 @@ def load_poetry_documents():
     per-book front-matter (first SKIP_HEAD_LINES) and boilerplate lines."""
     from datasets import load_dataset
     print(f"  loading {HF_DATASET_NAME} ({HF_SPLIT}) ...", flush=True)
+    if DOC_MODE == "rows":
+        # one document per row (PubMed articles, code files, ...). Stream so we
+        # don't download the whole corpus just to read MAX_DOCS documents.
+        sds = load_dataset(HF_DATASET_NAME, split=HF_SPLIT, streaming=True)
+        it = iter(sds)
+        first = next(it)
+        col = TEXT_COL if (TEXT_COL and TEXT_COL in first) else max(
+            (c for c in first if isinstance(first.get(c), str)),
+            key=lambda c: len(first[c]), default=None)
+        if col is None:
+            raise RuntimeError("DOC_MODE=rows: no string column found")
+        print(f"  text_col={col!r}  (doc-per-row, streaming)", flush=True)
+        docs = []
+        for row in [first, *it]:
+            t = row.get(col)
+            if isinstance(t, str) and t.strip():
+                docs.append(t.strip())
+            if len(docs) >= MAX_DOCS:
+                break
+        print(f"  collected {len(docs)} documents (rows mode)", flush=True)
+        return docs
     ds = load_dataset(HF_DATASET_NAME, split=HF_SPLIT)
     line_col, id_col = _detect_cols(ds)
     print(f"  line_col={line_col!r}  doc_id_col={id_col!r}  rows={len(ds)}",

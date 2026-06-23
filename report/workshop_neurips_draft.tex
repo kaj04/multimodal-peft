@@ -1136,4 +1136,70 @@ python janus/tests/05_chat_3way.py
 # > What is the capital of the Philippines?
 \end{verbatim}
 
+\clearpage
+\section{Medicine: qualitative before/after}
+\label{app:medicine}
+Same prompts, same model, adapter off (base) vs.\ on (medicine LoRA). The text
+continuations show the register shift toward clinical/abstract prose; the image
+grid shows that text specialisation leaves the generation direction essentially
+unchanged.
+
+\begin{table}[t]
+\centering\footnotesize
+\setlength{\tabcolsep}{6pt}\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{p{0.45\textwidth} p{0.45\textwidth}}
+\toprule
+\textbf{Base} & \textbf{Medicine LoRA} \\
+\midrule
+\multicolumn{2}{l}{\textit{Prompt:} ``The patient presented with''}\\
+a Hello Kitty-themed birthday party, and the red balloons were [\dots]
+&
+a Hello Kitty face on the right side of his head and was referred to our
+department for evaluation. He had been diagnosed as having schizophrenia in
+another hospital, but we found no signs or symptoms consistent with this
+diagnosis during physical examination [\dots] \\
+\midrule
+\multicolumn{2}{l}{\textit{Prompt:} ``Magnetic resonance imaging of the brain revealed''}\\
+a large, abnormal mass in my head. Hello! I'm here to help you with your
+question about magnetic resonance imaging [\dots]
+&
+a large cystic mass in one side, which was not associated with any other
+abnormalities [\dots] \\
+\midrule
+\multicolumn{2}{l}{\textit{Prompt:} ``The most common adverse effects include''}\\
+Hello! I'm here to help you with your question. Can you please provide more
+details about the medication or treatment that is causing these side effects?
+&
+headache, dizziness and fatigue. \\
+\bottomrule
+\end{tabular}
+\caption{Text continuations (greedy, deterministic; lightly trimmed, [\dots]).
+The base drifts into a generic assistant register (``Hello! I'm here to
+help\dots''), while the medicine adapter produces the clinical/abstract register
+of PubMed (case descriptions, radiology findings, direct symptom lists). Residual
+chat artifacts appear in both columns because the base is partly
+instruction-tuned.}
+\label{tab:med-text}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\setlength{\tabcolsep}{1.5pt}\renewcommand{\arraystretch}{1.0}
+\begin{tabular}{@{}cccc@{}}
+\rotatebox{90}{\footnotesize\ \ Base} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt0_base.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt1_base.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt6_base.png} \\
+\rotatebox{90}{\footnotesize Med LoRA} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt0_adapter.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt1_adapter.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt6_adapter.png} \\
+\end{tabular}
+\caption{Image generation under the text--medicine LoRA: same prompts and seeds,
+adapter off (top) vs.\ on (bottom). Generations are essentially unchanged,
+confirming the text adapter does not degrade the generation direction (cf.\ the
+near-zero Gen-CMMD).}
+\label{fig:med-t2i}
+\end{figure}
+
 \end{document}

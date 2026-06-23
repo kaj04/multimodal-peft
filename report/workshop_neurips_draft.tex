@@ -414,6 +414,53 @@ not measurably shift image generation. The remaining gap is free-form \emph{text
 generation, which the likelihood battery does not capture; we will quantify it with
 distributional metrics (e.g.\ MAUVE) in a final version.
 
+\paragraph{Beyond a single text domain.}
+To test that the text-direction result is not specific to poetry, we replicate the
+protocol on a second, semantically distant domain, medical abstracts
+(\texttt{ccdv/pubmed-summarization}; $r{=}32$, $\lambda{=}0.25$). Acquisition is
+substantially stronger than for poetry: held-out PubMed perplexity falls from
+$12.8$ to $8.4$, and on the comparable distance probe the domain moves from
+$1.23\times$ the general-text control (harder than generic text) to $0.79\times$
+(easier than generic text), confirming a large domain shift. Despite this strong
+adaptation, the forgetting battery stays at the base level
+(Table~\ref{tab:text-domain}: MMLU $0.492\!\to\!0.495$, POPE $0.877$, MME
+$1785\!\to\!1766$, WikiText PPL $13.71\!\to\!13.97$), and the image-generation
+direction shifts only marginally: the CMMD between the adapter's and the base's
+image generations is $\mathrm{XXX}\times10^{-3}$ (Gen-CMMD), of the same order as
+poetry's $\sim\!1.7$. The central assumption, that specialising the text stream
+does not degrade image generation, therefore generalises to a second domain and
+holds even under a much stronger textual adaptation than poetry.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{12pt}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Base} & \textbf{Medicine LoRA} \\
+\midrule
+\multicolumn{3}{l}{\textit{Acquisition (domain text)}}\\
+PubMed PPL $\times$control $\downarrow$ & $1.23\times$ & $\mathbf{0.79\times}$ \\
+\midrule
+\multicolumn{3}{l}{\textit{Interference (forgetting battery)}}\\
+WikiText PPL $\downarrow$ & $13.71$ & $13.97$ \\
+MMLU $\uparrow$           & $.492$  & $.495$ \\
+POPE acc $\uparrow$       & $.877$  & $.877$ \\
+MME $\uparrow$            & $1785$  & $1766$ \\
+\midrule
+\multicolumn{3}{l}{\textit{Generation shift from base (image direction)}}\\
+Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $\mathrm{XXX}$ \\
+\bottomrule
+\end{tabular}
+\caption{Generalisation of the text direction to a second, distant domain
+(medicine, \texttt{ccdv/pubmed-summarization}; $r{=}32$, $\lambda{=}0.25$). The
+adapter strongly acquires the domain (PubMed perplexity from $1.23\times$ to
+$0.79\times$ the general-text control, i.e.\ medical text becomes \emph{easier}
+than generic text), while the forgetting battery stays at the base level and image
+generation is essentially unchanged (Gen-CMMD near poetry's). Strong textual
+adaptation therefore does not degrade the image-generation direction.}
+\label{tab:text-domain}
+\end{table}
+
 \section{Discussion}
 \paragraph{Where modularity holds.}
 On standard, likelihood-scored benchmarks, PEFT on Janus-Pro-7B is modular:

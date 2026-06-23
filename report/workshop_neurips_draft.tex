@@ -263,9 +263,13 @@ footprint, while small, is uniformly larger than Naruto's and most visible on MM
 ($1785\!\to\!1713$, which stayed flat for Naruto). A single fixed configuration
 therefore does not guarantee equal style acquisition, nor an identical
 interference footprint, across datasets; only the qualitative conclusion (no
-catastrophic language forgetting) transfers unchanged. (We are running
-adapted-configuration experiments on this dataset to strengthen acquisition and
-to further characterise this dataset-dependence; reported in a future version.)
+catastrophic language forgetting) transfers unchanged. Scaling the recipe does
+not help: a stronger configuration (rank $64$, $\lambda{=}0.25$) moves the
+aggregate distribution closer to the sketch reference (KID $0.096\!\to\!0.065$,
+DINO $0.371\!\to\!0.521$) but does not improve the per-prompt edit strength
+(CLIP DirSim $0.086\!\to\!0.089$, still about half of Naruto's) and lowers image
+quality (CLIP-IQA $0.59\!\to\!0.49$), indicating the limit is intrinsic to the
+low-frequency style rather than a matter of capacity.
 
 \begin{table}[t]
 \centering\small
@@ -426,7 +430,7 @@ adaptation, the forgetting battery stays at the base level
 (Table~\ref{tab:text-domain}: MMLU $0.492\!\to\!0.495$, POPE $0.877$, MME
 $1785\!\to\!1766$, WikiText PPL $13.71\!\to\!13.97$), and the image-generation
 direction shifts only marginally: the CMMD between the adapter's and the base's
-image generations is $\mathrm{XXX}\times10^{-3}$ (Gen-CMMD), of the same order as
+image generations is $1.77\times10^{-3}$ (Gen-CMMD), the same order as
 poetry's $\sim\!1.7$. The central assumption, that specialising the text stream
 does not degrade image generation, therefore generalises to a second domain and
 holds even under a much stronger textual adaptation than poetry.
@@ -448,7 +452,7 @@ POPE acc $\uparrow$       & $.877$  & $.877$ \\
 MME $\uparrow$            & $1785$  & $1766$ \\
 \midrule
 \multicolumn{3}{l}{\textit{Generation shift from base (image direction)}}\\
-Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $\mathrm{XXX}$ \\
+Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $1.77$ \\
 \bottomrule
 \end{tabular}
 \caption{Generalisation of the text direction to a second, distant domain

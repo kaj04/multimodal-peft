@@ -55,21 +55,26 @@ OUTPUT_DIR = Path(os.environ.get(
     os.path.expanduser("~/multimodal-peft/janus/tests/output"),
 )) / "text_writing_qual" / (Path(ADAPTER).parent.name if ADAPTER else "base")
 
-# Incipits to continue (poetic seeds).
-INCIPITS = [
+# Incipits to continue. Default = poetry seeds; override with the INCIPITS env
+# (pipe-separated) for another domain, e.g. medicine.
+_DEF_INCIPITS = [
     "The autumn wind",
     "O gentle heart, what",
     "Upon the silent hill there",
     "I wandered lonely as",
     "Beneath the ancient oak,",
 ]
-# Neutral register probes (plain, non-poetic openings): if the adapter turns
-# these poetic, the default voice itself shifted.
-NEUTRAL = [
+INCIPITS = [s.strip() for s in os.environ.get("INCIPITS", "").split("|")
+            if s.strip()] or _DEF_INCIPITS
+# Neutral register probes (plain openings): if the adapter shifts these, the
+# default voice itself moved. Override with the NEUTRAL env (pipe-separated).
+_DEF_NEUTRAL = [
     "The weather today is",
     "To make a cup of tea,",
     "The meeting will start at",
 ]
+NEUTRAL = [s.strip() for s in os.environ.get("NEUTRAL", "").split("|")
+           if s.strip()] or _DEF_NEUTRAL
 SEP = "=" * 72
 
 

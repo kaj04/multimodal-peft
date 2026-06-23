@@ -574,6 +574,28 @@ adapter (Figure~\ref{fig:t2i_text_kl}) uses four neutral prompts (e.g.\ ``a cat
 sitting on a chair''). All conditions share the same seed schedule, so within a
 row the adapter is the only source of variation.
 
+\paragraph{Uncertainty quantification.}
+We attach $95\%$ confidence intervals to the reported numbers without retraining,
+using an estimator-appropriate method per metric type. The accuracy benchmarks
+(MMLU, POPE, MME) are proportions of correct items over a fixed evaluation set, so
+we use the Wilson score interval \citep{wilson1927}, which stays calibrated across
+the full range of proportions and sample sizes and is preferred over the Wald
+interval \citep{brown2001interval}. Per-instance metrics averaged over the
+generated set (CLIP directional similarity, DINO similarity, CLIP-IQA) use the
+normal interval $\bar{x}\pm1.96\,s/\sqrt{n}$, equivalently a nonparametric
+bootstrap over the $n$ generations \citep{efron1993bootstrap}. The set-level
+distributional metrics (CMMD, KID) have no closed-form variance, so we use the
+nonparametric bootstrap over the generated and reference sets ($B{=}2000$
+resamples, percentile interval) \citep{efron1993bootstrap}; KID is an unbiased
+MMD$^2$ estimator whose subset variance we also report
+\citep{binkowski2018demystifying}. Perplexity is a monotone transform of the mean
+per-chunk negative log-likelihood, so we bootstrap over evaluation chunks and
+exponentiate the interval endpoints. All intervals quantify evaluation-set
+sampling noise at fixed model weights; they do not capture training-seed variance.
+With these intervals the small benchmark movements we observe (e.g.\ MMLU
+$0.492\!\to\!0.479$, $95\%$ CI half-width $\approx\!0.026$) lie within sampling
+noise, whereas the acquisition shifts (e.g.\ CMMD, DirSim) do not.
+
 
 \section{Image-generation configuration: incremental ablation}
 \label{app:recipe}

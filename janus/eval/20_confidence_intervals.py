@@ -53,6 +53,37 @@ def mean_ci(mean, std, n, z=Z):
     return (mean - z * se, mean + z * se)
 
 
+def ppl_ci(mean_ce, ce_std, n, z=Z):
+    """CI on perplexity = exp(mean per-chunk NLL): CLT on the mean, then exp the
+    endpoints (PPL is a monotone transform). Needs ce_std (battery now dumps it)."""
+    if not n or ce_std is None:
+        return (float("nan"), float("nan"))
+    se = ce_std / math.sqrt(n)
+    return (math.exp(mean_ce - z * se), math.exp(mean_ce + z * se))
+
+
+def mme_score_ci(per_cat, B=2000, seed=0):
+    """Parametric bootstrap on the MME total score from the saved per-category
+    (acc, acc_plus, n): resample correct counts under the binomial model and
+    recompute the score sum_cat (acc + acc_plus) * 100. Free (no raw data)."""
+    try:
+        import numpy as np
+    except Exception:
+        return (float("nan"), float("nan"))
+    cats = [(c.get("n", 0), c.get("acc", 0.0), c.get("acc_plus", 0.0))
+            for c in per_cat.values() if c.get("n")]
+    if not cats:
+        return (float("nan"), float("nan"))
+    rng = np.random.default_rng(seed)
+    scores = np.zeros(B)
+    for n, acc, accp in cats:
+        npair = max(1, n // 2)
+        scores += (rng.binomial(n, acc, B) / n
+                   + rng.binomial(npair, accp, B) / npair) * 100.0
+    lo, hi = np.percentile(scores, [2.5, 97.5])
+    return (float(lo), float(hi))
+
+
 def row(label, value, lo, hi, method, fmt="{:.4f}"):
     v = fmt.format(value) if value is not None else "  --  "
     ci = (f"[{fmt.format(lo)}, {fmt.format(hi)}]"
@@ -76,13 +107,17 @@ def battery_rows(j):
         lo, hi = wilson(mme["overall_accuracy"], mme.get("n", 0))
         out.append(row("MME overall-acc", mme["overall_accuracy"], lo, hi, "Wilson"))
     if "total_mme_score" in mme:
-        out.append(row("MME total score", mme["total_mme_score"],
-                       float("nan"), float("nan"),
-                       "bootstrap (per-question)", fmt="{:.1f}"))
+        lo, hi = mme_score_ci(mme.get("per_category", {}))
+        out.append(row("MME total score", mme["total_mme_score"], lo, hi,
+                       "param-bootstrap", fmt="{:.1f}"))
     ppl = j.get("wikitext2_ppl", {})
     if "PPL" in ppl:
-        out.append(row("WikiText PPL", ppl["PPL"], float("nan"), float("nan"),
-                       "bootstrap (per-chunk NLL)", fmt="{:.3f}"))
+        if "ce_std" in ppl:
+            lo, hi = ppl_ci(ppl["mean_CE"], ppl["ce_std"], ppl.get("n_chunks", 0))
+            out.append(row("WikiText PPL", ppl["PPL"], lo, hi, "chunk-CLT", fmt="{:.3f}"))
+        else:
+            out.append(row("WikiText PPL", ppl["PPL"], float("nan"), float("nan"),
+                           "needs ce_std (re-run battery)", fmt="{:.3f}"))
     return tag, out
 
 

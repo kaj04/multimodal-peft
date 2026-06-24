@@ -181,10 +181,14 @@ def bench_ppl(model, processor):
             print(f"    chunk {i+1}/{n_chunks}  running PPL="
                   f"{np.exp(np.mean(losses)):.2f}", flush=True)
     mean_ce = float(np.mean(losses))
+    ce_std = float(np.std(losses, ddof=1)) if len(losses) > 1 else 0.0
     ppl = float(np.exp(mean_ce))
     print(f"  [PPL] DONE  mean_CE={mean_ce:.4f}  PPL={ppl:.2f}  "
           f"({(time.time()-t0)/60:.1f} min)", flush=True)
-    return {"mean_CE": mean_ce, "PPL": ppl, "n_chunks": n_chunks}
+    # ce_std + per-chunk CE let us bootstrap a CI on the perplexity later
+    # (PPL = exp(mean_CE); CI = exp(mean_CE +/- 1.96 * ce_std / sqrt(n_chunks))).
+    return {"mean_CE": mean_ce, "ce_std": ce_std, "PPL": ppl,
+            "n_chunks": n_chunks, "chunk_ce": [round(float(x), 5) for x in losses]}
 
 
 # ---------------------------------------------------------------------------

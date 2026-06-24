@@ -87,7 +87,9 @@ export ADAM_BETA2="0.95"
 export WEIGHT_DECAY="0.0"
 export GRAD_ACCUM="8"
 export GRAD_CLIP="1.0"
-export RECON_LOSS_WEIGHT="0.0"
+# Overridable so a --export can add the Anole-style reconstruction term
+# (RECON_LOSS_WEIGHT=0.5) as a competitor in the regularizer ablation.
+export RECON_LOSS_WEIGHT="${RECON_LOSS_WEIGHT:-0.0}"
 
 # Eval / sampling
 export EVAL_EVERY_STEPS="50"

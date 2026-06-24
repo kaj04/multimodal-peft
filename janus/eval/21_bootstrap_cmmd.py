@@ -78,6 +78,19 @@ def load_hf_refs(name, col, n, seed):
     return pool[:n]
 
 
+def _to_tensor(x):
+    """get_image_features returns a tensor in older transformers but a
+    BaseModelOutputWithPooling in newer ones -> extract the tensor robustly
+    (same logic as 06_metrics_panel._clip_feats)."""
+    if torch.is_tensor(x):
+        return x
+    for attr in ("image_features", "pooler_output", "last_hidden_state"):
+        v = getattr(x, attr, None)
+        if torch.is_tensor(v):
+            return v if v.dim() == 2 else v[:, 0]
+    raise RuntimeError(f"can't extract image feats from {type(x)}")
+
+
 @torch.no_grad()
 def clip_feats(imgs, device="cuda", batch=16):
     from transformers import CLIPModel, CLIPProcessor
@@ -86,7 +99,7 @@ def clip_feats(imgs, device="cuda", batch=16):
     out = []
     for i in range(0, len(imgs), batch):
         x = proc(images=imgs[i:i + batch], return_tensors="pt").to(device)
-        f = clip.get_image_features(**x)
+        f = _to_tensor(clip.get_image_features(**x))
         f = f / f.norm(dim=-1, keepdim=True)
         out.append(f.cpu().numpy())
     return np.concatenate(out, 0)

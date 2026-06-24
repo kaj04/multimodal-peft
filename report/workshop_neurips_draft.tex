@@ -279,16 +279,16 @@ low-frequency style rather than a matter of capacity.
 \textbf{Metric} & \textbf{Base} & \textbf{Sketch LoRA} \\
 \midrule
 \multicolumn{3}{l}{\textit{Acquisition (vs.\ sketch reference, $n{=}80$)}}\\
-CMMD $\downarrow$        & $.253$  & $\mathbf{.159}$ \\
+CMMD $\downarrow$        & $.253$  & $\mathbf{.159}_{[.154,.180]}$ \\
 KID $\downarrow$         & $.263$  & $\mathbf{.096}$ \\
-DINO sim $\uparrow$      & $.133$  & $\mathbf{.371}$ \\
-CLIP DirSim $\uparrow$   & ---     & $.086$ \\
+DINO sim $\uparrow$      & $.133$  & $\mathbf{.371}_{[.330,.413]}$ \\
+CLIP DirSim $\uparrow$   & ---     & $.086_{[.074,.098]}$ \\
 \midrule
 \multicolumn{3}{l}{\textit{Interference (forgetting battery)}}\\
-WikiText PPL $\downarrow$ & $13.71$ & $14.18$ \\
-MMLU $\uparrow$           & $.492$  & $.479$ \\
-POPE acc $\uparrow$       & $.877$  & $.871$ \\
-MME $\uparrow$            & $1785$  & $1713$ \\
+WikiText PPL $\downarrow$ & $13.71_{[13.30,14.13]}$ & $14.18_{[13.75,14.62]}$ \\
+MMLU $\uparrow$           & $.492_{[.466,.518]}$  & $.479_{[.453,.505]}$ \\
+POPE acc $\uparrow$       & $.877_{[.865,.889]}$  & $.871_{[.858,.882]}$ \\
+MME $\uparrow$            & $1785_{[1724,1847]}$  & $1713_{[1651,1772]}$ \\
 \bottomrule
 \end{tabular}
 \caption{Generalisation to a second image dataset (line-sketch scenes,
@@ -446,10 +446,10 @@ holds even under a much stronger textual adaptation than poetry.
 PubMed PPL $\times$control $\downarrow$ & $1.23\times$ & $\mathbf{0.79\times}$ \\
 \midrule
 \multicolumn{3}{l}{\textit{Interference (forgetting battery)}}\\
-WikiText PPL $\downarrow$ & $13.71$ & $13.97$ \\
-MMLU $\uparrow$           & $.492$  & $.495$ \\
-POPE acc $\uparrow$       & $.877$  & $.877$ \\
-MME $\uparrow$            & $1785$  & $1766$ \\
+WikiText PPL $\downarrow$ & $13.71_{[13.30,14.13]}$ & $13.97_{[13.57,14.40]}$ \\
+MMLU $\uparrow$           & $.492_{[.466,.518]}$  & $.495_{[.470,.521]}$ \\
+POPE acc $\uparrow$       & $.877_{[.865,.889]}$  & $.877_{[.864,.888]}$ \\
+MME $\uparrow$            & $1785_{[1724,1847]}$  & $1766_{[1705,1828]}$ \\
 \midrule
 \multicolumn{3}{l}{\textit{Generation shift from base (image direction)}}\\
 Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $1.77$ \\
@@ -1128,10 +1128,10 @@ single-seed run and are internal to this comparison.
 \toprule
 Regularizer & $\lVert\Delta W\rVert/\lVert W\rVert$ & CMMD $\downarrow$ & KID $\downarrow$ & DINO $\uparrow$ & CLIP-IQA $\uparrow$ & DirSim $\uparrow$ \\
 \midrule
-None ($\lambda{=}0$) & $1.55\%$ & $.252$ & $.036$ & $.622$ & $.679$ & $-.028$ \\
-L2-SP                & $0.60\%$ & $.225$ & $.034$ & $.641$ & $.703$ & $-.026$ \\
-Logit-MSE            & $1.14\%$ & $.181$ & $\mathbf{.024}$ & $.651$ & $\mathbf{.772}$ & $\mathbf{.002}$ \\
-KL-to-base (ours)    & $1.57\%$ & $\mathbf{.178}$ & $.025$ & $\mathbf{.659}$ & $.740$ & $-.001$ \\
+None ($\lambda{=}0$) & $1.55\%$ & $.252_{[.239,.278]}$ & $.036$ & $.622$ & $.679$ & $-.028$ \\
+L2-SP                & $0.60\%$ & $.225_{[.208,.250]}$ & $.034$ & $.641$ & $.703$ & $-.026$ \\
+Logit-MSE            & $1.14\%$ & $.181_{[.164,.205]}$ & $\mathbf{.024}$ & $.651$ & $\mathbf{.772}$ & $\mathbf{.002}$ \\
+KL-to-base (ours)    & $1.57\%$ & $\mathbf{.178}_{[.158,.197]}$ & $.025$ & $\mathbf{.659}$ & $.740$ & $-.001$ \\
 \bottomrule
 \end{tabular}
 \caption{Regularizer ablation at rank 32 (image direction, $N{=}80$, single seed;

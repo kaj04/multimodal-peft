@@ -153,7 +153,7 @@ def main():
             j = json.loads(Path(f).read_text())
         except Exception:
             continue
-        if "mmlu" not in j and "pope" not in j:
+        if not any(k in j for k in ("mmlu", "pope", "wikitext2_ppl")):
             continue
         tag, rows = battery_rows(j)
         blocks.append((f"BATTERY  tag={tag}", rows))

@@ -92,6 +92,21 @@ def clip_feats(imgs, device="cuda", batch=16):
     return np.concatenate(out, 0)
 
 
+def inception_feats(imgs, device="cuda"):
+    """Inception features via clean-fid (same backbone KID uses). Returns (N, 2048)."""
+    import tempfile
+    import torch as _t
+    from cleanfid.fid import build_feature_extractor, get_folder_features
+    feat_model = build_feature_extractor("clean", _t.device(device))
+    with tempfile.TemporaryDirectory() as d:
+        for i, im in enumerate(imgs):
+            im.save(f"{d}/{i:05d}.png")
+        feats = get_folder_features(d, feat_model, num_workers=2, batch_size=32,
+                                    device=_t.device(device), mode="clean",
+                                    verbose=False)
+    return np.asarray(feats)
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     assert GEN_DIR, "set GEN_DIR"
@@ -125,12 +140,39 @@ def main():
                     - 2 * Kxy[np.ix_(ix, iy)].mean())
     lo, hi = np.percentile(boots, [2.5, 97.5])
 
-    res = {"label": LABEL, "metric": "CMMD", "gen_dir": GEN_DIR,
+    res = {"label": LABEL, "gen_dir": GEN_DIR,
            "ref_dir": REF_DIR or f"HF:{HF_DATASET_NAME}",
-           "n_gen": n, "n_ref": m, "B": B, "sigma": sigma,
-           "value": float(point), "ci95": [float(lo), float(hi)],
-           "boot_std": float(boots.std())}
+           "n_gen": n, "n_ref": m, "B": B,
+           "CMMD": {"value": float(point), "ci95": [float(lo), float(hi)],
+                    "boot_std": float(boots.std()), "sigma": sigma}}
     print(f"  CMMD = {point:.4f}  95% CI [{lo:.4f}, {hi:.4f}]  (boot sd {boots.std():.4f})")
+
+    # KID (best-effort): Inception features via clean-fid + polynomial-kernel
+    # MMD^2 (Binkowski et al. 2018), bootstrapped the same way. Wrapped so a
+    # clean-fid API mismatch cannot kill the CMMD result above.
+    try:
+        kx = inception_feats(gen)
+        ky = inception_feats(ref)
+        d = kx.shape[1]
+        Pxx = (kx @ kx.T / d + 1.0) ** 3
+        Pyy = (ky @ ky.T / d + 1.0) ** 3
+        Pxy = (kx @ ky.T / d + 1.0) ** 3
+        kpoint = Pxx.mean() + Pyy.mean() - 2 * Pxy.mean()
+        kb = np.empty(B)
+        for b in range(B):
+            ix = rng.integers(0, n, n)
+            iy = rng.integers(0, m, m)
+            kb[b] = (Pxx[np.ix_(ix, ix)].mean()
+                     + Pyy[np.ix_(iy, iy)].mean()
+                     - 2 * Pxy[np.ix_(ix, iy)].mean())
+        klo, khi = np.percentile(kb, [2.5, 97.5])
+        res["KID"] = {"value": float(kpoint), "ci95": [float(klo), float(khi)],
+                      "boot_std": float(kb.std())}
+        print(f"  KID  = {kpoint:.4f}  95% CI [{klo:.4f}, {khi:.4f}]")
+    except Exception as e:
+        res["KID"] = {"value": None, "error": f"{type(e).__name__}: {e}"}
+        print(f"  KID  skipped: {type(e).__name__}: {e}")
+
     (OUT / f"cmmd_ci_{LABEL}.json").write_text(json.dumps(res, indent=2), encoding="utf-8")
     print(f"  saved -> {OUT}/cmmd_ci_{LABEL}.json")
 

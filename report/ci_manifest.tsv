@@ -1,0 +1,61 @@
+# Confidence-interval manifest (HEADLINE scope only).
+# One row per (paper table cell, metric). The consolidator 22_fill_ci.py joins
+# this against the CI JSONs so no number is ever transcribed by eye.
+#
+# columns:  table  column  metric  src  key  field
+#   src=ci20    -> read confidence_intervals/ci_table.json, block tag==key, row label==field
+#   src=cmmd21  -> read confidence_intervals/cmmd_ci_<key>.json, field in {CMMD,KID}
+#
+# PPL rows point at a dedicated PPL-only battery re-run tagged "<config>_ppl"
+# (SKIP=mmlu,pope,mme) so the full battery json is not overwritten.
+table	column	metric	src	key	field
+# ---- tab:sketch (Base vs Sketch v5) ----
+tab:sketch	Base	MMLU	ci20	base_no_adapter	MMLU acc
+tab:sketch	Base	POPE	ci20	base_no_adapter	POPE acc
+tab:sketch	Base	MME	ci20	base_no_adapter	MME total score
+tab:sketch	Base	WikiText PPL	ci20	base_ppl	WikiText PPL
+tab:sketch	Sketch	MMLU	ci20	gen_7b_sketch_v5	MMLU acc
+tab:sketch	Sketch	POPE	ci20	gen_7b_sketch_v5	POPE acc
+tab:sketch	Sketch	MME	ci20	gen_7b_sketch_v5	MME total score
+tab:sketch	Sketch	WikiText PPL	ci20	sketch_v5_ppl	WikiText PPL
+tab:sketch	Sketch	DirSim	ci20	gen_7b_sketch_v5	CLIP DirSim
+tab:sketch	Sketch	DINO	ci20	gen_7b_sketch_v5	DINO sim (after)
+tab:sketch	Sketch	CMMD	cmmd21	sketch_v5_after	CMMD
+tab:sketch	Sketch	KID	cmmd21	sketch_v5_after	KID
+# ---- tab:reg-ablation (None / L2-SP / MSE / KL) ----
+tab:reg-ablation	None	CMMD	cmmd21	regabl_none	CMMD
+tab:reg-ablation	None	KID	cmmd21	regabl_none	KID
+tab:reg-ablation	None	DINO	ci20	gen_7b_kl0_r32	DINO sim (after)
+tab:reg-ablation	None	CLIP-IQA	ci20	gen_7b_kl0_r32	CLIP-IQA (after)
+tab:reg-ablation	None	DirSim	ci20	gen_7b_kl0_r32	CLIP DirSim
+tab:reg-ablation	L2-SP	CMMD	cmmd21	regabl_l2	CMMD
+tab:reg-ablation	L2-SP	KID	cmmd21	regabl_l2	KID
+tab:reg-ablation	L2-SP	DINO	ci20	gen_7b_l2_r32	DINO sim (after)
+tab:reg-ablation	L2-SP	CLIP-IQA	ci20	gen_7b_l2_r32	CLIP-IQA (after)
+tab:reg-ablation	L2-SP	DirSim	ci20	gen_7b_l2_r32	CLIP DirSim
+tab:reg-ablation	MSE	CMMD	cmmd21	regabl_mse	CMMD
+tab:reg-ablation	MSE	KID	cmmd21	regabl_mse	KID
+tab:reg-ablation	MSE	DINO	ci20	gen_7b_mse_r32	DINO sim (after)
+tab:reg-ablation	MSE	CLIP-IQA	ci20	gen_7b_mse_r32	CLIP-IQA (after)
+tab:reg-ablation	MSE	DirSim	ci20	gen_7b_mse_r32	CLIP DirSim
+tab:reg-ablation	KL	CMMD	cmmd21	regabl_kl	CMMD
+tab:reg-ablation	KL	KID	cmmd21	regabl_kl	KID
+tab:reg-ablation	KL	DINO	ci20	gen_7b_rank_r32	DINO sim (after)
+tab:reg-ablation	KL	CLIP-IQA	ci20	gen_7b_rank_r32	CLIP-IQA (after)
+tab:reg-ablation	KL	DirSim	ci20	gen_7b_rank_r32	CLIP DirSim
+# ---- tab:panel Final column (Naruto v5) ----
+tab:panel	Final	CMMD	cmmd21	panel_final	CMMD
+tab:panel	Final	KID	cmmd21	panel_final	KID
+tab:panel	Final	DINO	ci20	gen_7b_naruto_v5	DINO sim (after)
+tab:panel	Final	CLIP-IQA	ci20	gen_7b_naruto_v5	CLIP-IQA (after)
+tab:panel	Final	DirSim	ci20	gen_7b_naruto_v5	CLIP DirSim
+# ---- tab:text-domain (Medicine) ----
+tab:text-domain	Base	MMLU	ci20	base_no_adapter	MMLU acc
+tab:text-domain	Base	POPE	ci20	base_no_adapter	POPE acc
+tab:text-domain	Base	MME	ci20	base_no_adapter	MME total score
+tab:text-domain	Base	WikiText PPL	ci20	base_ppl	WikiText PPL
+tab:text-domain	Medicine	MMLU	ci20	text_med_r32_kl025	MMLU acc
+tab:text-domain	Medicine	POPE	ci20	text_med_r32_kl025	POPE acc
+tab:text-domain	Medicine	MME	ci20	text_med_r32_kl025	MME total score
+tab:text-domain	Medicine	WikiText PPL	ci20	med_ppl	WikiText PPL
+tab:text-domain	Medicine	Gen-CMMD	cmmd21	gen_cmmd_med	CMMD

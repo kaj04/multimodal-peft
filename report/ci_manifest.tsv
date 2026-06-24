@@ -43,6 +43,11 @@ tab:reg-ablation	KL	KID	cmmd21	regabl_kl	KID
 tab:reg-ablation	KL	DINO	ci20	gen_7b_rank_r32	DINO sim (after)
 tab:reg-ablation	KL	CLIP-IQA	ci20	gen_7b_rank_r32	CLIP-IQA (after)
 tab:reg-ablation	KL	DirSim	ci20	gen_7b_rank_r32	CLIP DirSim
+tab:reg-ablation	Anole	CMMD	cmmd21	regabl_anole	CMMD
+tab:reg-ablation	Anole	KID	cmmd21	regabl_anole	KID
+tab:reg-ablation	Anole	DINO	ci20	gen_7b_anole_r32	DINO sim (after)
+tab:reg-ablation	Anole	CLIP-IQA	ci20	gen_7b_anole_r32	CLIP-IQA (after)
+tab:reg-ablation	Anole	DirSim	ci20	gen_7b_anole_r32	CLIP DirSim
 # ---- tab:panel Final column (Naruto v5) ----
 tab:panel	Final	CMMD	cmmd21	panel_final	CMMD
 tab:panel	Final	KID	cmmd21	panel_final	KID

@@ -100,7 +100,8 @@ RUBRIC = (
     "with EXACTLY these three lines:\n"
     "STYLE: <A or B>\nCONTENT: <A or B>\nOVERALL: <A or B>"
 )
-_PAT = {c: re.compile(rf"{c}\s*:\s*\**\s*([AB])\b", re.I) for c in ("STYLE", "CONTENT", "OVERALL")}
+_PAT = {c: re.compile(rf"{c}\s*:\s*\**\s*(?:image\s+)?\**\s*([AB])\b", re.I)
+        for c in ("STYLE", "CONTENT", "OVERALL")}
 
 
 def parse(resp, c):

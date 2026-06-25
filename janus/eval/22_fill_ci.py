@@ -51,8 +51,9 @@ def fmt(v, lo, hi):
     if v is None:
         return "MISSING"
     if lo is None or hi != hi or lo != lo:
-        return f"{v:.4f}  [no CI]"
-    return f"{v:.4f}  [{lo:.4f}, {hi:.4f}]"
+        return f"{v:.4f}  (no SE)"
+    se = (hi - lo) / 3.9199  # 95% CI half-width / 1.96 = standard error of the estimate
+    return f"{v:.4f} +/- {se:.4f}   [{lo:.4f}, {hi:.4f}]"
 
 
 def main():

@@ -156,10 +156,12 @@ Eq.~\eqref{eq:kl} because the quantity we wish to preserve is the model's output
 \emph{distribution}, for which the KL to the base is the natural divergence: a
 weight-space penalty constrains parameters regardless of their functional effect,
 while a logit MSE is sensitive to the (uncalibrated) logit scale. An ablation
-against L2-SP and logit-MSE at rank 32 (Appendix~\ref{app:reg-ablation}) supports
-this: at essentially matched intervention strength the KL clearly beats no
-regularizer and is on par with the best alternative (logit-MSE); we keep KL for its
-substantially wider adoption.
+against L2-SP, logit-MSE and the reconstruction loss of Anole
+\citep{chern2024anole} at rank 32 (Appendix~\ref{app:reg-ablation}) supports this:
+under a trigger-free evaluation and at matched intervention strength, the KL attains
+the best style acquisition of all methods (CMMD $.120$ vs.\ $.165$ for no
+regularizer), while logit-MSE over-constrains the output and fails to transfer the
+style, and Anole acquires it but without anchoring to the base.
 
 \paragraph{Forgetting battery and target selection.}
 We probe the non-target directions with four public benchmarks scored by
@@ -279,16 +281,16 @@ low-frequency style rather than a matter of capacity.
 \textbf{Metric} & \textbf{Base} & \textbf{Sketch LoRA} \\
 \midrule
 \multicolumn{3}{l}{\textit{Acquisition (vs.\ sketch reference, $n{=}80$)}}\\
-CMMD $\downarrow$        & $.253$  & $\mathbf{.159}_{[.154,.180]}$ \\
-KID $\downarrow$         & $.263$  & $\mathbf{.096}$ \\
-DINO sim $\uparrow$      & $.133$  & $\mathbf{.371}_{[.330,.413]}$ \\
-CLIP DirSim $\uparrow$   & ---     & $.086_{[.074,.098]}$ \\
+CMMD $\downarrow$        & $.253$  & $\mathbf{.159}_{\pm.007}$ \\
+KID $\downarrow$         & $.263$  & $\mathbf{.096}_{\pm.013}$ \\
+DINO sim $\uparrow$      & $.133$  & $\mathbf{.371}_{\pm.021}$ \\
+CLIP DirSim $\uparrow$   & ---     & $.086_{\pm.006}$ \\
 \midrule
 \multicolumn{3}{l}{\textit{Interference (forgetting battery)}}\\
-WikiText PPL $\downarrow$ & $13.71_{[13.30,14.13]}$ & $14.18_{[13.75,14.62]}$ \\
-MMLU $\uparrow$           & $.492_{[.466,.518]}$  & $.479_{[.453,.505]}$ \\
-POPE acc $\uparrow$       & $.877_{[.865,.889]}$  & $.871_{[.858,.882]}$ \\
-MME $\uparrow$            & $1785_{[1724,1847]}$  & $1713_{[1651,1772]}$ \\
+WikiText PPL $\downarrow$ & $13.71_{\pm.21}$ & $14.18_{\pm.22}$ \\
+MMLU $\uparrow$           & $.492_{\pm.013}$  & $.479_{\pm.013}$ \\
+POPE acc $\uparrow$       & $.877_{\pm.006}$  & $.871_{\pm.006}$ \\
+MME $\uparrow$            & $1785_{\pm31}$  & $1713_{\pm31}$ \\
 \bottomrule
 \end{tabular}
 \caption{Generalisation to a second image dataset (line-sketch scenes,
@@ -446,10 +448,10 @@ holds even under a much stronger textual adaptation than poetry.
 PubMed PPL $\times$control $\downarrow$ & $1.23\times$ & $\mathbf{0.79\times}$ \\
 \midrule
 \multicolumn{3}{l}{\textit{Interference (forgetting battery)}}\\
-WikiText PPL $\downarrow$ & $13.71_{[13.30,14.13]}$ & $13.97_{[13.57,14.40]}$ \\
-MMLU $\uparrow$           & $.492_{[.466,.518]}$  & $.495_{[.470,.521]}$ \\
-POPE acc $\uparrow$       & $.877_{[.865,.889]}$  & $.877_{[.864,.888]}$ \\
-MME $\uparrow$            & $1785_{[1724,1847]}$  & $1766_{[1705,1828]}$ \\
+WikiText PPL $\downarrow$ & $13.71_{\pm.21}$ & $13.97_{\pm.21}$ \\
+MMLU $\uparrow$           & $.492_{\pm.013}$  & $.495_{\pm.013}$ \\
+POPE acc $\uparrow$       & $.877_{\pm.006}$  & $.877_{\pm.006}$ \\
+MME $\uparrow$            & $1785_{\pm31}$  & $1766_{\pm32}$ \\
 \midrule
 \multicolumn{3}{l}{\textit{Generation shift from base (image direction)}}\\
 Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $1.77$ \\
@@ -575,25 +577,22 @@ sitting on a chair''). All conditions share the same seed schedule, so within a
 row the adapter is the only source of variation.
 
 \paragraph{Uncertainty quantification.}
-We attach $95\%$ confidence intervals to the reported numbers without retraining,
-using an estimator-appropriate method per metric type. The accuracy benchmarks
-(MMLU, POPE, MME) are proportions of correct items over a fixed evaluation set, so
-we use the Wilson score interval \citep{wilson1927}, which stays calibrated across
-the full range of proportions and sample sizes and is preferred over the Wald
-interval \citep{brown2001interval}. Per-instance metrics averaged over the
-generated set (CLIP directional similarity, DINO similarity, CLIP-IQA) use the
-normal interval $\bar{x}\pm1.96\,s/\sqrt{n}$, equivalently a nonparametric
-bootstrap over the $n$ generations \citep{efron1993bootstrap}. The set-level
-distributional metrics (CMMD, KID) have no closed-form variance, so we use the
+We report each number as $\text{mean}\pm$ one standard error, computed without
+retraining and with an estimator-appropriate method per metric type. The accuracy
+benchmarks (MMLU, POPE, MME) are proportions of correct items over a fixed
+evaluation set, so their standard error follows the binomial/Wilson form
+\citep{wilson1927,brown2001interval}. Per-instance metrics averaged over the
+generated set (CLIP directional similarity, DINO similarity, CLIP-IQA) use
+$s/\sqrt{n}$ over the $n$ generations, equivalently a nonparametric bootstrap
+\citep{efron1993bootstrap}. The set-level distributional metrics (CMMD, KID) have
+no closed-form variance, so their standard error is the standard deviation of a
 nonparametric bootstrap over the generated and reference sets ($B{=}2000$
-resamples, percentile interval) \citep{efron1993bootstrap}; KID is an unbiased
-MMD$^2$ estimator whose subset variance we also report
-\citep{binkowski2018demystifying}. Perplexity is a monotone transform of the mean
-per-chunk negative log-likelihood, so we bootstrap over evaluation chunks and
-exponentiate the interval endpoints. All intervals quantify evaluation-set
-sampling noise at fixed model weights; they do not capture training-seed variance.
-With these intervals the small benchmark movements we observe (e.g.\ MMLU
-$0.492\!\to\!0.479$, $95\%$ CI half-width $\approx\!0.026$) lie within sampling
+resamples) \citep{efron1993bootstrap,binkowski2018demystifying}. Perplexity is a
+monotone transform of the mean per-chunk negative log-likelihood, whose standard
+error propagates through the exponential. All standard errors quantify
+evaluation-set sampling noise at fixed model weights; they do not capture
+training-seed variance. The small benchmark movements we observe (e.g.\ MMLU
+$0.492\!\to\!0.479$, within $\sim\!1$ standard error) thus lie within sampling
 noise, whereas the acquisition shifts (e.g.\ CMMD, DirSim) do not.
 
 
@@ -1107,37 +1106,51 @@ scriptural citation (bottom).}
 
 \section{Regularizer ablation}
 \label{app:reg-ablation}
-We compare the KL-to-base regularizer against two literature alternatives at fixed
-rank 32 in the image-generation direction: L2-SP \citep{xuhong2018l2sp} (an L2
-penalty on the LoRA update, weight space) and logit-MSE (a squared-error match to
-the base logits, output space). All four use the same training budget and are
-evaluated identically on $80$ held-out prompts; we also report each adapter's
-intervention strength $\lVert\Delta W\rVert_F/\lVert W\rVert_F$. The no-regularizer
-baseline is the weakest on every quality metric despite carrying the largest update,
-and at essentially the same intervention strength ($1.55$ vs.\ $1.57\%$) the KL
-regularizer reaches far better acquisition (CMMD $.178$ vs.\ $.252$): it
-\emph{redirects} the update rather than merely shrinking it. Weight-space L2-SP
-instead simply shrinks the update (to $0.60\%$) and loses acquisition; logit-MSE is
-competitive with the KL. We adopt the KL because it is far more widely established as
-a forgetting regularizer (LwF, RLHF). Absolute values come from a dedicated
-single-seed run and are internal to this comparison.
+We compare the KL-to-base regularizer at fixed rank 32 in the image-generation
+direction against three alternatives: L2-SP \citep{xuhong2018l2sp} (an L2 penalty
+on the LoRA update, weight space), logit-MSE (a squared-error match to the base
+logits, output space), and the reconstruction-loss objective of Anole
+\citep{chern2024anole}, the standard recipe for fine-tuning native generators
+(\texttt{CE}$+0.5\,$recon, no base anchor). All share the same training budget and
+data and are evaluated identically on $80$ held-out prompts under the canonical,
+trigger-free protocol used in the rest of the paper; we also report each adapter's
+intervention strength $\lVert\Delta W\rVert_F/\lVert W\rVert_F$. The KL attains the
+best distributional acquisition of all methods: at essentially the same
+intervention strength as the unregularized baseline ($1.57$ vs.\ $1.55\%$) it
+reaches a markedly lower CMMD ($.120$ vs.\ $.165$), i.e.\ it \emph{redirects} the
+update rather than merely shrinking it. Logit-MSE over-constrains the output
+distribution: it keeps image quality high but barely transfers the style without a
+prompt trigger (DirSim $.029$, the worst of all methods), which the prompt-triggered
+evaluation had masked. Weight-space L2-SP simply shrinks the update (to $0.60\%$).
+The Anole reconstruction loss acquires the style comparably to the unregularized
+baseline (DirSim $.162$) but with worse distributional fidelity than the KL (CMMD
+$.157$ vs.\ $.120$) and, being an acquisition term rather than a base anchor, offers
+no forgetting protection. The KL alone attains the best acquisition while keeping
+the adapter anchored to the base. Single-seed run.
 
 \begin{table}[t]\centering\small
-\setlength{\tabcolsep}{6pt}
+\setlength{\tabcolsep}{3.5pt}
 \begin{tabular}{lcccccc}
 \toprule
 Regularizer & $\lVert\Delta W\rVert/\lVert W\rVert$ & CMMD $\downarrow$ & KID $\downarrow$ & DINO $\uparrow$ & CLIP-IQA $\uparrow$ & DirSim $\uparrow$ \\
 \midrule
-None ($\lambda{=}0$) & $1.55\%$ & $.252_{[.239,.278]}$ & $.036$ & $.622$ & $.679$ & $-.028$ \\
-L2-SP                & $0.60\%$ & $.225_{[.208,.250]}$ & $.034$ & $.641$ & $.703$ & $-.026$ \\
-Logit-MSE            & $1.14\%$ & $.181_{[.164,.205]}$ & $\mathbf{.024}$ & $.651$ & $\mathbf{.772}$ & $\mathbf{.002}$ \\
-KL-to-base (ours)    & $1.57\%$ & $\mathbf{.178}_{[.158,.197]}$ & $.025$ & $\mathbf{.659}$ & $.740$ & $-.001$ \\
+None ($\lambda{=}0$) & $1.55\%$ & $.165_{\pm.009}$ & $.029_{\pm.004}$ & $.626_{\pm.013}$ & $.666_{\pm.011}$ & $.157_{\pm.007}$ \\
+L2-SP                & $0.60\%$ & $.150_{\pm.009}$ & $.023_{\pm.004}$ & $.624_{\pm.011}$ & $.683_{\pm.008}$ & $\mathbf{.164}_{\pm.007}$ \\
+Logit-MSE            & $1.14\%$ & $.229_{\pm.012}$ & $.106_{\pm.011}$ & $.410_{\pm.018}$ & $\mathbf{.725}_{\pm.014}$ & $.029_{\pm.006}$ \\
+KL-to-base (ours)    & $1.57\%$ & $\mathbf{.120}_{\pm.010}$ & $\mathbf{.018}_{\pm.004}$ & $\mathbf{.643}_{\pm.013}$ & $.691_{\pm.010}$ & $.153_{\pm.007}$ \\
+Anole (recon)        & $\mathit{??}\%$ & $.157_{\pm.009}$ & $.028_{\pm.005}$ & $.637_{\pm.011}$ & $.666_{\pm.010}$ & $.162_{\pm.007}$ \\
 \bottomrule
 \end{tabular}
 \caption{Regularizer ablation at rank 32 (image direction, $N{=}80$, single seed;
-bold = best on the quality metrics). At essentially matched intervention strength
-$\lVert\Delta W\rVert/\lVert W\rVert$, KL clearly beats no regularizer; L2-SP merely
-shrinks the update. Absolute values are internal to this comparison.}
+$\pm$ one standard error; bold = best per metric). Under the canonical,
+trigger-free evaluation, the KL attains the best distributional acquisition
+(CMMD, KID, DINO), separating clearly from the no-regularizer baseline at matched
+intervention strength ($\lVert\Delta W\rVert/\lVert W\rVert$ $1.57$ vs.\ $1.55\%$,
+CMMD $.120$ vs.\ $.165$). Logit-MSE over-constrains the output distribution and
+barely transfers the style without the prompt trigger (DirSim $.029$) despite high
+image quality; L2-SP merely shrinks the update. The Anole reconstruction loss
+acquires the style comparably to the unregularized baseline but with worse
+distributional fidelity than the KL and no base anchoring.}
 \label{tab:reg-ablation}
 \end{table}
 

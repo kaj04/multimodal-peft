@@ -244,7 +244,8 @@ and degrades for $\lambda\geq1$. The no-reference quality CLIP-IQA instead rises
 monotonically with $\lambda$; crucially it is identical at $\lambda{=}0.25$ and
 $0.5$ ($.691$), so the acquisition optimum at $\lambda{=}0.25$ is \emph{not} a
 quality artefact, and the eye's mild preference for $\lambda{=}0.5$ reflects a
-property the style metrics do not capture (content preservation).}
+property the style metrics do not capture (content preservation;
+Appendix~\ref{app:metric-debug}).}
 \label{tab:kl}
 \end{table}
 
@@ -1180,6 +1181,57 @@ Three-way text chat (type a question, get three answers):
 python janus/tests/05_chat_3way.py
 # > What is the capital of the Philippines?
 \end{verbatim}
+
+\clearpage
+\section{Metric debugging: is the $\lambda$ optimum a bug, memorization, or noise?}
+\label{app:metric-debug}
+The style metrics put the image-generation acquisition optimum at $\lambda{=}0.25$,
+while the eye mildly prefers $\lambda{=}0.5$. We resolve this directly by
+re-scoring the \emph{already-generated} KL-sweep images (no retraining) against
+both held-out and training references, and with two additional embedding metrics
+(Table~\ref{tab:metric-debug}). \textbf{Not noise:} the $\lambda$-ranking of CMMD
+is identical against held-out and training reals (both order
+$0.25\!<\!0.5\!<\!0\!<\!1\!<\!1.5$), so the optimum is stable, not a small-$N$
+artefact. \textbf{Not memorization or leakage:} for every $\lambda$ the
+nearest-neighbour DINOv2 similarity to \emph{training} images is \emph{lower} than
+to held-out images (and CMMD to training is higher), so the generations are not
+near-copies of the training set. \textbf{A metric-choice effect, not a bug:} CMMD
+(a CLIP-space distribution distance) favours $\lambda{=}0.25$, but the
+memorization-robust DINOv2-space distribution distance (DINO-MMD) instead favours
+$\lambda{=}0.5$ ($.035$ vs.\ $.041$), and content preservation -- the DINOv2
+similarity between the adapter's image and the base image for the same prompt --
+rises from $.32$ at $\lambda{=}0.25$ to $.39$ at $\lambda{=}0.5$. The CLIP style
+metrics reward pure style proximity (optimum $\lambda{=}0.25$); the DINO
+distribution distance and content preservation reward style transfer that keeps
+the prompt content (optimum $\lambda{=}0.5$), which is what the eye weighs. This
+justifies the $\lambda{=}0.5$ Final recipe.
+
+\begin{table}[h]
+\centering\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccccc}
+\toprule
+$\lambda$ & CMMD$_{\text{test}}\downarrow$ & CMMD$_{\text{train}}\downarrow$ & DINO-MMD$\downarrow$ & NN$_{\text{test}}\uparrow$ & NN$_{\text{train}}\uparrow$ & CtntPres$\uparrow$ \\
+\midrule
+$0$    & $.155$ & $.163$ & $.044$ & $.626$ & $.609$ & $.303$ \\
+$0.25$ & $\mathbf{.100}$ & $.111$ & $.041$ & $.647$ & $.634$ & $.317$ \\
+$0.5$  & $.108$ & $.124$ & $\mathbf{.035}$ & $.643$ & $.633$ & $.389$ \\
+$1$    & $.205$ & $.221$ & $.091$ & $.439$ & $.411$ & $.721$ \\
+$1.5$  & $.221$ & $.235$ & $.114$ & $.388$ & $.364$ & $.792$ \\
+\bottomrule
+\end{tabular}
+\caption{Metric debugging on the KL sweep (rank 32), re-scoring the
+already-generated images (no retraining). CMMD$_{\text{test/train}}$: CLIP-space
+distribution distance to held-out vs.\ training reals (identical ranking $\Rightarrow$
+signal not noise; train $>$ test $\Rightarrow$ no training over-fit). NN: nearest
+DINOv2 similarity to held-out vs.\ training reals (train $<$ test everywhere
+$\Rightarrow$ no memorization). DINO-MMD: memorization-robust DINOv2-space
+distribution distance -- optimum $\lambda{=}0.5$. CtntPres: DINOv2 similarity
+between the adapter and base image for the same prompt -- rises with $\lambda$. The
+CLIP metrics favour $\lambda{=}0.25$; DINO-MMD and content preservation favour
+$\lambda{=}0.5$.}
+\label{tab:metric-debug}
+\end{table}
 
 \clearpage
 \section{Medicine: qualitative before/after}

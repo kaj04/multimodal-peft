@@ -83,17 +83,30 @@ def load_imgs(tag, n):
 
 
 RUBRIC = (
-    'The intended image is: "{prompt}", rendered in the Naruto anime art style. '
-    "You are shown Image A and Image B (same intended content, different settings). "
-    "Judge each criterion independently and choose the better image:\n"
-    "- STYLE: which better captures the Naruto/anime art style (bold ink outlines, "
-    "cel shading, anime character design)?\n"
-    "- CONTENT: which is the more recognizable, coherent depiction of the intended "
-    "content (subject and composition preserved)?\n"
-    "- OVERALL: which is the better result balancing style and content?\n"
-    "Answer in EXACTLY this format, nothing else:\nSTYLE: <A or B>\nCONTENT: <A or B>\nOVERALL: <A or B>"
+    "You are an expert judge of anime-style image generation. The target is the "
+    'prompt "{prompt}", rendered in the Naruto anime art style (bold black ink '
+    "outlines, flat cel shading, saturated colours, anime facial features and "
+    "proportions). You are shown Image A and Image B: the SAME target produced by "
+    "two different generation settings. Compare them on three criteria:\n"
+    "- STYLE: which image more convincingly adopts the Naruto/anime art style "
+    "(line work, cel shading, character design) rather than a photorealistic or "
+    "generic look?\n"
+    "- CONTENT: which image more faithfully and coherently depicts the target "
+    'subject and composition of "{prompt}" (recognisable subject, intact '
+    "structure, fewer artifacts)?\n"
+    "- OVERALL: which is the better Naruto-style rendition of the target, "
+    "balancing style and content?\n"
+    "First reason briefly (one short sentence per criterion), then end your reply "
+    "with EXACTLY these three lines:\n"
+    "STYLE: <A or B>\nCONTENT: <A or B>\nOVERALL: <A or B>"
 )
-_PAT = {c: re.compile(rf"{c}\s*:\s*\**\s*([AB])", re.I) for c in ("STYLE", "CONTENT", "OVERALL")}
+_PAT = {c: re.compile(rf"{c}\s*:\s*\**\s*([AB])\b", re.I) for c in ("STYLE", "CONTENT", "OVERALL")}
+
+
+def parse(resp, c):
+    """Take the LAST occurrence (the verdict line after the reasoning)."""
+    ms = _PAT[c].findall(resp)
+    return ms[-1].upper() if ms else None
 
 
 def main():
@@ -124,15 +137,14 @@ def main():
         inp = proc.apply_chat_template(
             msgs, add_generation_prompt=True, tokenize=True,
             return_dict=True, return_tensors="pt").to(model.device)
-        out = model.generate(**inp, max_new_tokens=40, do_sample=False)
+        out = model.generate(**inp, max_new_tokens=220, do_sample=False)
         return proc.batch_decode(out[:, inp["input_ids"].shape[1]:],
                                  skip_special_tokens=True)[0]
 
-    # counts[criterion] = wins for C1, total decisive ; pos[criterion] = 'A' wins
     crit = ("STYLE", "CONTENT", "OVERALL")
-    win1 = {c: 0 for c in crit}
-    tot = {c: 0 for c in crit}
     posA = {c: 0 for c in crit}
+    posTot = {c: 0 for c in crit}
+    per_prompt = [{c: {} for c in crit} for _ in range(N_PROMPTS)]   # [i][crit][order]=config
     records = []
 
     for i in range(N_PROMPTS):
@@ -142,30 +154,47 @@ def main():
             rec = {"prompt": prompts[i], "order": "C1C2" if order == 0 else "C2C1",
                    "raw": resp.strip()}
             for c in crit:
-                m = _PAT[c].search(resp)
-                pick = m.group(1).upper() if m else None
+                pick = parse(resp, c)
                 rec[c] = pick
                 if pick in ("A", "B"):
-                    tot[c] += 1
+                    posTot[c] += 1
                     if pick == "A":
                         posA[c] += 1
-                    winner = A_label if pick == "A" else B_label
-                    if winner == C1:
-                        win1[c] += 1
+                    per_prompt[i][c][order] = A_label if pick == "A" else B_label
             records.append(rec)
         if (i + 1) % 10 == 0 or SMOKE:
             print(f"    judged {i+1}/{N_PROMPTS}", flush=True)
 
-    lines = ["=" * 70, f"  VLM judge ({JUDGE_ID})  {C1} vs {C2}  | N={N_PROMPTS} prompts x2 orders",
-             f"  win-rate = fraction of decisive judgments won by {C1}", "-" * 70,
-             f"{'criterion':<10}{C1+' win%':>12}{'95% CI':>20}{'pos.bias(A%)':>14}{'n':>6}"]
+    # MT-Bench-style: a config wins a PROMPT on a criterion only if preferred in
+    # BOTH orders; a split (order-dependent) result is a tie.
+    lines = ["=" * 80,
+             f"  VLM judge ({JUDGE_ID})  {C1} vs {C2}  | {N_PROMPTS} prompts, both orders",
+             "  consistent win = preferred in BOTH orders; tie = order-dependent", "-" * 80,
+             f"{'criterion':<10}{C1+' win%':>11}{C2+' win%':>11}{'tie%':>8}"
+             f"{C1+' CI(decisive)':>22}{'posbias(A%)':>13}"]
     summary = {}
     for c in crit:
-        wr = win1[c] / tot[c] if tot[c] else float("nan")
-        lo, hi = wilson(win1[c], tot[c])
-        pb = posA[c] / tot[c] if tot[c] else float("nan")
-        summary[c] = {"c1_winrate": wr, "ci95": [lo, hi], "posbias_A": pb, "n": tot[c]}
-        lines.append(f"{c:<10}{wr*100:>11.1f}%{f'[{lo*100:.1f}, {hi*100:.1f}]':>20}{pb*100:>13.1f}%{tot[c]:>6}")
+        c1w = c2w = tie = 0
+        for i in range(N_PROMPTS):
+            o = per_prompt[i][c]
+            if 0 not in o or 1 not in o:
+                continue
+            if o[0] == C1 and o[1] == C1:
+                c1w += 1
+            elif o[0] == C2 and o[1] == C2:
+                c2w += 1
+            else:
+                tie += 1
+        n = max(1, c1w + c2w + tie)
+        dec = c1w + c2w
+        wr = c1w / dec if dec else float("nan")
+        lo, hi = wilson(c1w, dec)
+        pb = posA[c] / posTot[c] if posTot[c] else float("nan")
+        summary[c] = {"c1_consistent_win": c1w, "c2_consistent_win": c2w, "tie": tie,
+                      "n_prompts": c1w + c2w + tie, "c1_winrate_decisive": wr,
+                      "ci95": [lo, hi], "posbias_A": pb}
+        lines.append(f"{c:<10}{100*c1w/n:>10.1f}%{100*c2w/n:>10.1f}%{100*tie/n:>7.1f}%"
+                     f"{f'[{lo*100:.0f},{hi*100:.0f}]':>22}{pb*100:>12.1f}%")
     report = "\n".join(lines)
     print("\n" + report)
     (OUT / f"judge_{C1}_vs_{C2}.txt").write_text(report + "\n", encoding="utf-8")

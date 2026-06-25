@@ -232,13 +232,19 @@ enables the recipe.
 \toprule
 \textbf{Metric} & $\lambda{=}0$ & $\lambda{=}0.25$ & $\lambda{=}0.5$ & $\lambda{=}1.0$ & $\lambda{=}1.5$ \\
 \midrule
-CMMD $\downarrow$       & $.155$ & $\mathbf{.100}$ & $.108$ & $.205$ & $.221$ \\
+CMMD $\downarrow$       & $.165$ & $\mathbf{.100}$ & $.120$ & $.205$ & $.221$ \\
 DINO sim $\uparrow$     & $.626$ & $\mathbf{.647}$ & $.643$ & $.439$ & $.388$ \\
 CLIP DirSim $\uparrow$  & $.157$ & $\mathbf{.164}$ & $.152$ & $.049$ & $.024$ \\
+CLIP-IQA $\uparrow$     & $.666$ & $.691$ & $.691$ & $.738$ & $.739$ \\
 \bottomrule
 \end{tabular}
-\caption{Image-generation KL sweep at rank $32$. Acquisition (bold = best) peaks
-near $\lambda{=}0.25$ to $0.5$ and degrades for $\lambda\geq1$.}
+\caption{Image-generation KL sweep at rank $32$ (trigger-free evaluation).
+Style acquisition (CMMD/DINO/CLIP-DirSim, bold = best) peaks near $\lambda{=}0.25$
+and degrades for $\lambda\geq1$. The no-reference quality CLIP-IQA instead rises
+monotonically with $\lambda$; crucially it is identical at $\lambda{=}0.25$ and
+$0.5$ ($.691$), so the acquisition optimum at $\lambda{=}0.25$ is \emph{not} a
+quality artefact, and the eye's mild preference for $\lambda{=}0.5$ reflects a
+property the style metrics do not capture (content preservation).}
 \label{tab:kl}
 \end{table}
 

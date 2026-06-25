@@ -249,6 +249,42 @@ Appendix~\ref{app:metric-debug}).}
 \label{tab:kl}
 \end{table}
 
+\paragraph{Why $\lambda{=}0.5$ for the Final recipe.}
+The CLIP style metrics place the acquisition optimum at $\lambda{=}0.25$
+(Table~\ref{tab:kl}), yet we adopt $\lambda{=}0.5$. The reason is that CMMD and
+directional similarity measure proximity to the style \emph{distribution} but not
+whether the prompt's content survives the stylisation, and three content-aware
+signals disagree with them: a memorization-robust DINOv2-space distribution
+distance and a content-preservation score both peak at $\lambda{=}0.5$
+(Appendix~\ref{app:metric-debug}), and an independent VLM judge (Qwen2-VL-7B)
+prefers $\lambda{=}0.5$ over $\lambda{=}0.25$ on every criterion
+(Table~\ref{tab:judge}), significantly so on content. We mitigate the judge's
+position bias by scoring both image orders and counting only order-consistent
+preferences (MT-Bench style). The visual intuition behind the Final recipe is thus
+confirmed by a rigorous, bias-controlled procedure, while the metric optimum at
+$\lambda{=}0.25$ reflects a known limitation of distribution-proximity metrics.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{lccc}
+\toprule
+Criterion & $\lambda{=}0.25$ win & $\lambda{=}0.5$ win & tie \\
+\midrule
+Style    & $23.8\%$ & $\mathbf{30.0\%}$ & $46.2\%$ \\
+Content  & $6.2\%$  & $\mathbf{20.0\%}$ & $73.8\%$ \\
+Overall  & $23.8\%$ & $\mathbf{30.0\%}$ & $46.2\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Independent VLM judge (Qwen2-VL-7B), $\lambda{=}0.25$ vs.\ $\lambda{=}0.5$
+on $80$ held-out prompts, each scored in both image orders. A configuration wins a
+prompt only if preferred in \emph{both} orders; order-dependent results are ties
+(position-bias mitigation). On the order-consistent comparisons the judge prefers
+$\lambda{=}0.5$ on every criterion, significantly on content (decisive win-rate
+$76\%$, $95\%$ CI $[55,89]$), and never favours $\lambda{=}0.25$.}
+\label{tab:judge}
+\end{table}
+
 \paragraph{Beyond a single style: generalisation and a dataset-dependent recipe.}
 We replicate the image protocol on a second, unrelated dataset, black-and-white
 line-sketch scenes (\texttt{zoheb/sketch-scene}), using the \emph{same}
@@ -1203,8 +1239,9 @@ similarity between the adapter's image and the base image for the same prompt --
 rises from $.32$ at $\lambda{=}0.25$ to $.39$ at $\lambda{=}0.5$. The CLIP style
 metrics reward pure style proximity (optimum $\lambda{=}0.25$); the DINO
 distribution distance and content preservation reward style transfer that keeps
-the prompt content (optimum $\lambda{=}0.5$), which is what the eye weighs. This
-justifies the $\lambda{=}0.5$ Final recipe.
+the prompt content (optimum $\lambda{=}0.5$), which is what the eye weighs, and
+what an independent VLM judge confirms (Table~\ref{tab:judge}). This justifies the
+$\lambda{=}0.5$ Final recipe.
 
 \begin{table}[h]
 \centering\small

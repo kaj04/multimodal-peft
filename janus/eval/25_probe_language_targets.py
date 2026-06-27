@@ -37,13 +37,13 @@ MAX_DOCS = int(os.environ.get("MAX_DOCS", "300"))
 SEED = int(os.environ.get("SEED", "42"))
 OUT = Path(os.path.expanduser("~/multimodal-peft/janus/tests/output")) / "language_probe"
 
-# name -> ("wiki", lang_code) | ("cipher", None)
+# name -> ("tapaco", lang) | ("wiki", lang_code) | ("cipher", None)
 CANDIDATES = [
-    ("welsh",     ("wiki", "cy")),
-    ("yoruba",    ("wiki", "yo")),
-    ("latin",     ("wiki", "la")),
-    ("esperanto", ("wiki", "eo")),
-    ("cipher",    ("cipher", None)),
+    ("klingon",   ("tapaco", "tlh")),   # fictional conlang (Star Trek), largest conlang corpus
+    ("quenya",    ("tapaco", "qya")),   # Tolkien Elvish
+    ("welsh",     ("wiki", "cy")),      # low-resource natural (abundant data) reference
+    ("yoruba",    ("wiki", "yo")),      # low-resource natural reference
+    ("cipher",    ("cipher", None)),    # synthetic language: unlimited data, max distance
 ]
 SEP = "=" * 70
 
@@ -67,8 +67,17 @@ def collect_text(spec):
     kind, arg = spec
     if kind == "cipher":
         return _english_text().translate(_cipher_map())
-    # wiki: stream articles for the language code
     from datasets import load_dataset
+    if kind == "tapaco":
+        # TAPACO = Tatoeba paraphrase corpus (incl. fictional langs Klingon/Quenya).
+        ds = load_dataset("community-datasets/tapaco", arg, split="train",
+                          trust_remote_code=True)
+        cols = ds.column_names
+        col = "paraphrase" if "paraphrase" in cols else next(
+            (c for c in cols if isinstance(ds[0].get(c), str)), cols[-1])
+        return "\n".join(str(r[col]) for r in ds if r.get(col))
+    # wiki: stream articles for the language code
+
     ds = load_dataset("wikimedia/wikipedia", f"{WIKI_DATE}.{arg}", split="train",
                       streaming=True)
     parts, n = [], 0

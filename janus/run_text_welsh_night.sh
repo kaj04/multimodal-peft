@@ -37,7 +37,10 @@ LORA_ALPHA="${LORA_ALPHA:-$((2 * LORA_RANK))}"
 KL_LAMBDA="${KL_LAMBDA:-0.1}"                           # LOW anchor -> strong adaptation (poetry was 0.5)
 EPOCHS="${EPOCHS:-3}"
 TRAIN_WINDOWS="${TRAIN_WINDOWS:-6000}"                  # ~3M tokens
-MAX_TRAIN_MINUTES="${MAX_TRAIN_MINUTES:-150}"
+# Cap HIGH on purpose: EPOCHS should govern (training finishes naturally in
+# ~3-4h), the cap is only a safety backstop. --time is set above it for margin.
+MAX_TRAIN_MINUTES="${MAX_TRAIN_MINUTES:-300}"
+TRAIN_TIME="${TRAIN_TIME:-06:00:00}"                    # SLURM wall (overrides runner's 4h)
 RUN_NAME="${RUN_NAME:-text_7b_welsh_r${LORA_RANK}_kl${KL_LAMBDA}}"
 
 # ---- forgetting battery sizes --------------------------------------------
@@ -73,8 +76,8 @@ if [ "$BASE_BATTERY" = "1" ]; then
     echo "  [ref] base battery        job $bj"
 fi
 
-# 1) TRAIN
-JT=$(sbatch --parsable \
+# 1) TRAIN  (--time overrides the runner's 4h header so the high cap fits)
+JT=$(sbatch --parsable --time="$TRAIN_TIME" \
     --export=ALL,RUN_NAME=$RUN_NAME,HF_DATASET_NAME=$HF_DATASET_NAME,HF_DATASET_CONFIG=$HF_DATASET_CONFIG,DOC_MODE=$DOC_MODE,HF_TEXT_COL=$HF_TEXT_COL,MAX_DOCS=$MAX_DOCS,LORA_RANK=$LORA_RANK,LORA_ALPHA=$LORA_ALPHA,KL_LAMBDA=$KL_LAMBDA,EPOCHS=$EPOCHS,TRAIN_WINDOWS=$TRAIN_WINDOWS,MAX_TRAIN_MINUTES=$MAX_TRAIN_MINUTES \
     "$REPO/janus/train/03_run_train_text_poetry.sh")
 echo "  [1] train                 job $JT"

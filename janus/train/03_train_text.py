@@ -161,6 +161,28 @@ def _detect_cols(ds):
     return line_col, id_col
 
 
+LOAD_RETRIES = int(os.environ.get("LOAD_RETRIES", "6"))
+
+
+def _load_dataset_retry(*args, **kwargs):
+    """load_dataset with retry/backoff. Resolving wikimedia/wikipedia (a huge
+    multi-language repo) lists the whole repo tree, which intermittently returns
+    a transient HF Hub 5xx (504 Gateway Timeout). One bad response should not
+    kill a multi-hour run, so we retry with linear backoff."""
+    from datasets import load_dataset
+    last = None
+    for attempt in range(1, LOAD_RETRIES + 1):
+        try:
+            return load_dataset(*args, **kwargs)
+        except Exception as e:  # HfHubHTTPError / requests timeouts / ...
+            last = e
+            wait = min(60, 8 * attempt)
+            print(f"  [load_dataset attempt {attempt}/{LOAD_RETRIES}] "
+                  f"{type(e).__name__}: {e}\n  -> retry in {wait}s", flush=True)
+            time.sleep(wait)
+    raise last
+
+
 def load_poetry_documents():
     """Group consecutive lines per doc id into whole-poem documents, dropping
     per-book front-matter (first SKIP_HEAD_LINES) and boilerplate lines."""
@@ -169,9 +191,10 @@ def load_poetry_documents():
     if DOC_MODE == "rows":
         # one document per row (PubMed articles, Wikipedia, code files, ...).
         # Stream so we don't download the whole corpus just to read MAX_DOCS docs.
-        sds = (load_dataset(HF_DATASET_NAME, HF_DATASET_CONFIG, split=HF_SPLIT,
-                            streaming=True) if HF_DATASET_CONFIG else
-               load_dataset(HF_DATASET_NAME, split=HF_SPLIT, streaming=True))
+        sds = (_load_dataset_retry(HF_DATASET_NAME, HF_DATASET_CONFIG,
+                                   split=HF_SPLIT, streaming=True)
+               if HF_DATASET_CONFIG else
+               _load_dataset_retry(HF_DATASET_NAME, split=HF_SPLIT, streaming=True))
         it = iter(sds)
         first = next(it)
         col = TEXT_COL if (TEXT_COL and TEXT_COL in first) else max(
@@ -189,8 +212,8 @@ def load_poetry_documents():
                 break
         print(f"  collected {len(docs)} documents (rows mode)", flush=True)
         return docs
-    ds = (load_dataset(HF_DATASET_NAME, HF_DATASET_CONFIG, split=HF_SPLIT)
-          if HF_DATASET_CONFIG else load_dataset(HF_DATASET_NAME, split=HF_SPLIT))
+    ds = (_load_dataset_retry(HF_DATASET_NAME, HF_DATASET_CONFIG, split=HF_SPLIT)
+          if HF_DATASET_CONFIG else _load_dataset_retry(HF_DATASET_NAME, split=HF_SPLIT))
     line_col, id_col = _detect_cols(ds)
     print(f"  line_col={line_col!r}  doc_id_col={id_col!r}  rows={len(ds)}",
           flush=True)

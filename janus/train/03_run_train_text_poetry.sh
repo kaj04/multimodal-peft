@@ -58,10 +58,15 @@ export RESUME="${RESUME:-1}"
 export WANDB_PROJECT="${WANDB_PROJECT:-janus-peft}"
 
 $JANUS_PY ~/multimodal-peft/janus/train/03_train_text.py
+TRAIN_RC=$?
 
 echo ""
 echo "================================================================"
-echo "  Done: $(date)"
+echo "  Done: $(date)  (train exit=$TRAIN_RC)"
 echo "  Output: ~/multimodal-peft/janus/train/output/$RUN_NAME/"
 echo "  adapter_best -> $(readlink -f ~/multimodal-peft/janus/train/output/$RUN_NAME/adapter_best 2>/dev/null)"
 echo "================================================================"
+
+# Propagate the real exit code so a crashed training marks the SLURM job FAILED
+# and the chained afterok evals do NOT run on a missing adapter.
+exit $TRAIN_RC

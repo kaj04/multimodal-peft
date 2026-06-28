@@ -50,6 +50,9 @@ MODEL_ID = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-7B")
 
 # Dataset (poetry). Columns auto-detected if the defaults are absent.
 HF_DATASET_NAME = os.environ.get("HF_DATASET_NAME", "biglam/gutenberg-poetry-corpus")
+# Some HF datasets require a config/subset name (e.g. wikimedia/wikipedia ->
+# "20231101.cy" for Welsh). Empty => single-config dataset (poetry/PubMed).
+HF_DATASET_CONFIG = os.environ.get("HF_DATASET_CONFIG", "")
 HF_SPLIT        = os.environ.get("HF_SPLIT", "train")
 LINE_COL        = os.environ.get("LINE_COL", "line")
 DOC_ID_COL      = os.environ.get("DOC_ID_COL", "gutenberg_id")
@@ -164,9 +167,11 @@ def load_poetry_documents():
     from datasets import load_dataset
     print(f"  loading {HF_DATASET_NAME} ({HF_SPLIT}) ...", flush=True)
     if DOC_MODE == "rows":
-        # one document per row (PubMed articles, code files, ...). Stream so we
-        # don't download the whole corpus just to read MAX_DOCS documents.
-        sds = load_dataset(HF_DATASET_NAME, split=HF_SPLIT, streaming=True)
+        # one document per row (PubMed articles, Wikipedia, code files, ...).
+        # Stream so we don't download the whole corpus just to read MAX_DOCS docs.
+        sds = (load_dataset(HF_DATASET_NAME, HF_DATASET_CONFIG, split=HF_SPLIT,
+                            streaming=True) if HF_DATASET_CONFIG else
+               load_dataset(HF_DATASET_NAME, split=HF_SPLIT, streaming=True))
         it = iter(sds)
         first = next(it)
         col = TEXT_COL if (TEXT_COL and TEXT_COL in first) else max(
@@ -184,7 +189,8 @@ def load_poetry_documents():
                 break
         print(f"  collected {len(docs)} documents (rows mode)", flush=True)
         return docs
-    ds = load_dataset(HF_DATASET_NAME, split=HF_SPLIT)
+    ds = (load_dataset(HF_DATASET_NAME, HF_DATASET_CONFIG, split=HF_SPLIT)
+          if HF_DATASET_CONFIG else load_dataset(HF_DATASET_NAME, split=HF_SPLIT))
     line_col, id_col = _detect_cols(ds)
     print(f"  line_col={line_col!r}  doc_id_col={id_col!r}  rows={len(ds)}",
           flush=True)
@@ -355,8 +361,9 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     print(SEP)
-    print(f"  LoRA TEXT fine-tune (poetry) | run={RUN_NAME}")
-    print(f"  dataset={HF_DATASET_NAME}  seq_len={SEQ_LEN}")
+    print(f"  LoRA TEXT fine-tune | run={RUN_NAME}")
+    print(f"  dataset={HF_DATASET_NAME}{('/'+HF_DATASET_CONFIG) if HF_DATASET_CONFIG else ''}"
+          f"  mode={DOC_MODE}  seq_len={SEQ_LEN}")
     print(f"  rank={LORA_RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
           f"kl_lambda={KL_LAMBDA}")
     print(f"  LR={LR} epochs={EPOCHS} grad_accum={GRAD_ACCUM} "

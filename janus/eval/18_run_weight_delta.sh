@@ -36,6 +36,10 @@ A="$A;img_l2=$O/gen_7b_l2_r32/adapter_best;img_mse=$O/gen_7b_mse_r32/adapter_bes
 A="$A;img_anole=$O/gen_7b_anole_r32/adapter_best"
 for r in 4 8 16 32 64; do A="$A;text_r$r=$O/text_poetry_r${r}_kl0.5/adapter_best"; done
 for kl in 0 0.25 1 1.5; do A="$A;text_kl$(echo $kl|tr -d '.')=$O/text_poetry_r16_kl${kl}/adapter_best"; done
+# Strong text targets at r32 for a same-rank comparison: Welsh (language) vs
+# medicine (domain) vs poetry r32 above (style). KL differs (0.1/0.25/0.5).
+A="$A;text_welsh=$O/text_7b_welsh_r32_kl0.1/adapter_best"
+A="$A;text_med=$O/text_med_r32_kl025/adapter_best"
 export ADAPTERS="${A#;}"
 
 echo "================================================================"

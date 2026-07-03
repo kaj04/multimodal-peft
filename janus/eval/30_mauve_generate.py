@@ -137,8 +137,9 @@ def generate_set(model, tok, prompt_ids):
     for i in range(0, len(prompt_ids), BATCH):
         chunk = prompt_ids[i:i + BATCH]
         inp = torch.tensor(chunk, dtype=torch.long, device=model.device)
-        o = model.generate(input_ids=inp, generation_mode="text", do_sample=True,
-                           top_p=TOP_P, temperature=TEMPERATURE,
+        att = torch.ones_like(inp)   # fixed-length prompts -> no padding
+        o = model.generate(input_ids=inp, attention_mask=att, generation_mode="text",
+                           do_sample=True, top_p=TOP_P, temperature=TEMPERATURE,
                            max_new_tokens=GEN_TOKENS,
                            pad_token_id=(tok.eos_token_id or 0))
         for row in o:

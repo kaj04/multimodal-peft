@@ -22,6 +22,10 @@ from pathlib import Path
 
 TAG   = os.environ.get("TAG", "base")
 KINDS = [k.strip() for k in os.environ.get("KINDS", "english").split(",") if k.strip()]
+# REF_TAG="" -> compare against the HUMAN reference (acquisition/quality).
+# REF_TAG="base" -> compare against that tag's generations (distribution shift
+# from base, the free-form-text analogue of Gen-CMMD).
+REF_TAG = os.environ.get("REF_TAG", "")
 FEATURIZE_MODEL = os.environ.get("FEATURIZE_MODEL", "gpt2-large")
 MAX_LEN   = int(os.environ.get("MAX_LEN", "256"))
 DEVICE_ID = int(os.environ.get("DEVICE_ID", "0"))
@@ -42,21 +46,28 @@ def main():
 
     for kind in KINDS:
         gp = OUT / f"gen_{kind}.json"
-        rp = REFS / f"ref_{kind}.json"
+        if REF_TAG:
+            rp = ROOT / REF_TAG / f"gen_{kind}.json"
+            key = f"{kind}_vs_{REF_TAG}"
+        else:
+            rp = REFS / f"ref_{kind}.json"
+            key = kind
+        if TAG == REF_TAG:
+            continue   # self-comparison is trivially 1
         if not (gp.exists() and rp.exists()):
-            print(f"  [skip] {kind}: missing {gp.name} or {rp.name}", flush=True)
+            print(f"  [skip] {key}: missing {gp} or {rp}", flush=True)
             continue
         gens = json.loads(gp.read_text())
         refs = json.loads(rp.read_text())
         n = min(len(gens), len(refs))
         gens, refs = gens[:n], refs[:n]
-        print(f"  [{kind}] MAUVE on n={n} (featurize={FEATURIZE_MODEL}) ...", flush=True)
+        print(f"  [{key}] MAUVE on n={n} (featurize={FEATURIZE_MODEL}) ...", flush=True)
         out = mauve.compute_mauve(
             p_text=gens, q_text=refs, device_id=DEVICE_ID,
             max_text_length=MAX_LEN, verbose=False, featurize_model_name=FEATURIZE_MODEL,
             seed=SEED)
-        results[kind] = {"mauve": float(out.mauve), "n": n}
-        print(f"  [{kind}] MAUVE = {out.mauve:.4f}", flush=True)
+        results[key] = {"mauve": float(out.mauve), "n": n}
+        print(f"  [{key}] MAUVE = {out.mauve:.4f}", flush=True)
 
     out_json.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"\n  saved -> {out_json}\n  {results}")

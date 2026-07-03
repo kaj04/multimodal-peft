@@ -11,7 +11,9 @@ import os
 from pathlib import Path
 
 ROOT = Path(os.path.expanduser("~/multimodal-peft/janus/tests/output")) / "mauve"
-KINDS = ["english", "poetry", "pubmed", "welsh"]
+# (label, json-key). english_vs_base = distribution shift from base (~Gen-CMMD).
+COLS = [("english", "english"), ("en|base", "english_vs_base"),
+        ("poetry", "poetry"), ("pubmed", "pubmed"), ("welsh", "welsh")]
 
 
 def main():
@@ -22,13 +24,14 @@ def main():
             continue
         rows[d.name] = json.loads(j.read_text())
 
-    hdr = f"  {'tag':<28}" + "".join(f"{k[:7]:>10}" for k in KINDS)
-    lines = ["=" * 72, "  MAUVE (higher = closer to human text; [0,1])",
-             "  english = free-form English preserved; others = target acquisition",
-             "=" * 72, hdr, "-" * 72]
+    hdr = f"  {'tag':<28}" + "".join(f"{lab:>10}" for lab, _ in COLS)
+    lines = ["=" * 78, "  MAUVE (higher = closer to reference; [0,1])",
+             "  english/target = vs human text (quality/acquisition); "
+             "en|base = vs base gen (forgetting)",
+             "=" * 78, hdr, "-" * 78]
     for tag, r in rows.items():
         cells = ""
-        for k in KINDS:
+        for _, k in COLS:
             v = r.get(k, {}).get("mauve")
             cells += f"{v:>10.3f}" if isinstance(v, (int, float)) else f"{'-':>10}"
         lines.append(f"  {tag:<28}{cells}")

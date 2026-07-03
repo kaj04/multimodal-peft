@@ -170,11 +170,14 @@ def main():
         # references are model-independent -> build/save once in _refs
         ref_path = REFS / f"ref_{kind}.json"
         prm_path = REFS / f"prompts_{kind}.json"
+        prompt_ids = None
         if ref_path.exists() and prm_path.exists():
-            prompt_ids = json.loads(prm_path.read_text())
-            print(f"  [{kind}] reusing shared refs/prompts ({len(prompt_ids)})", flush=True)
-        else:
-            print(f"  [{kind}] building prompts + refs ...", flush=True)
+            cached = json.loads(prm_path.read_text())
+            if len(cached) >= N:   # reuse only if the cache is big enough (smoke->full safe)
+                prompt_ids = cached[:N]
+                print(f"  [{kind}] reusing shared refs/prompts ({N})", flush=True)
+        if prompt_ids is None:
+            print(f"  [{kind}] building prompts + refs (N={N}) ...", flush=True)
             prompt_ids, refs = build_prompts_and_refs(kind, tok)
             ref_path.write_text(json.dumps(refs), encoding="utf-8")
             prm_path.write_text(json.dumps(prompt_ids), encoding="utf-8")

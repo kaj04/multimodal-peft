@@ -1,0 +1,1907 @@
+% =====================================================================
+%  CL4FMAgents 2026 (NeurIPS 2026 workshop) -- full submission source.
+%  Needs in the same Overleaf project: neurips_2026.sty, references.bib, figs/
+%  Deadline: 29 Aug 2026. Non-archival. 8 pages excluding references.
+% =====================================================================
+\documentclass{article}
+
+% Double-blind workshop (anonymous). If CL4FMAgents turns out to be
+% SINGLE-blind, swap the two lines below and put the real author block back.
+\usepackage[dblblindworkshop]{neurips_2026}
+% \usepackage[sglblindworkshop]{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[hidelinks]{hyperref}   % hidelinks = no coloured boxes around links
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{subcaption}
+
+\title{Cross-Modal Forgetting and Transfer in Parameter-Efficient\\
+Post-Training of a Unified Multimodal Model}
+
+\workshoptitle{NeurIPS 2026 Workshop on Continual Learning in the Era of
+Foundation Models and Embodied Agents}
+
+\author{%
+  Anonymous Authors \\
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Unified multimodal models serve image understanding and image generation from a
+single shared backbone, which gives post-training an unusual failure mode:
+adapting one capability can degrade another that lives in a \emph{different
+modality} of the same weights. We measure this cross-modal forgetting for LoRA
+post-training of Janus-Pro-7B. Adapting each direction in turn on five targets
+chosen to lie outside the base model's existing competence, from a poetic
+register to a language it barely speaks, we find that the capabilities we did not
+train stay at base level throughout, on public benchmarks and on free-form
+generation alike, even when the adapter drives held-out Welsh perplexity down by
+$64\%$. Each adapter changes under $2\%$ of the backbone's weights, concentrated
+in the MLP and sparing attention. That localization turns out to cut both ways:
+the acquired language is not usable through the visual pathway, leaving Welsh
+visual question answering at chance, where the model is not even reading the
+question. Adaptation in a unified model is contained, and containment is what
+both protects the other modalities and keeps the new capability from reaching
+them.
+\end{abstract}
+
+\section{Introduction}
+Continual learning asks how a model can acquire a new capability without
+destroying the ones it already has \citep{mccloskey1989catastrophic,
+french1999catastrophic}. Foundation models have made the question practical
+rather than academic: post-training is now the normal way to specialize a
+released checkpoint, and every such update risks eroding the pretrained
+competence that motivated using the checkpoint in the first place
+\citep{kirkpatrick2017ewc, li2017lwf}.
+
+Unified multimodal models give this question an unusual shape. Models such as
+Chameleon \citep{chameleon2024}, the 4M family \citep{bachmann20244m21},
+Unified-IO~2 \citep{lu2024unifiedio2} and Janus \citep{wu2024janus, januspro}
+serve both understanding (image$+$text to text) and generation (text to image)
+from a single set of weights. When post-training specializes one capability, the
+capabilities at risk are not only the neighbouring tasks of the same modality:
+they include tasks in a \emph{different} modality that happen to share the same
+parameters. We call this cross-modal forgetting. It cannot arise in a task
+specialist, such as a text-to-image diffusion model, because there is no other
+modality to preserve; it is the natural stress test of the ``one backbone, many
+capabilities'' premise.
+
+Parameter-efficient fine-tuning, LoRA in particular \citep{hu2022lora}, is the
+default post-training tool and is often assumed to be safe by construction
+because it moves few parameters. The assumption is under-tested in exactly the
+setting where it matters most. Prior work bounds the problem without answering
+it: LoRA forgets less than full fine-tuning while also learning less
+\citep{biderman2024lora}, and increasing the LoRA rank beyond a small value buys
+little additional task performance \citep{zhang2024scalingmeetsfinetuning}, but
+both are measured within a single modality. Work that does address the
+understanding/generation tension in unified models resolves it by changing the
+model, routing among several adapters or adding a mixture-of-experts layer
+\citep{dou2024loramoe}; such designs presuppose that plain LoRA interferes, but
+none of them measures how much it actually does. That measurement is what we
+provide.
+
+Measuring it credibly requires care about the target. If the fine-tuning target
+is something the base model already handles well, the adapter barely has to move
+the weights, and finding ``no forgetting'' says nothing: a weak intervention
+cannot damage anything, so the result is guaranteed in advance and would be
+reported all the same. We therefore select every target by how poorly the base
+already handles it, on a scale that is comparable across targets, and we report
+how large the resulting weight update is, so that a reader can check that the
+intervention was real before believing that nothing broke.
+
+We report two findings on Janus-Pro-7B. First, post-training is strongly
+localized: over five targets, LoRA ranks $2$ to $128$ and KL weights
+$\lambda\in[0,1.5]$, the capabilities we did not train stay at base level within
+evaluation noise, on the four benchmarks, on free-form generation, and in the
+other modality's generative distribution. Second, the same localization has a
+cost: a language acquired in the text stream is not usable through the visual
+pathway at all. Isolation is what protects the untrained capabilities, and it is
+also what prevents the new one from reaching them.
+
+\paragraph{Contributions.}
+\textbf{(i)} We show that claims of the form ``PEFT does not forget'' are only
+meaningful when the adaptation target is demonstrably outside the base model's
+existing competence, and we make that condition explicit and measurable: every
+target is scored by the base model's perplexity on it relative to a fixed
+control, and every adaptation is accompanied by the size of the weight update it
+induced.
+\textbf{(ii)} Under that condition, the untrained capabilities are preserved
+across the whole range of adaptation strength we can reach, including under a
+strong distributional shift toward a language the base barely modelled (held-out
+perplexity $40.7\to14.6$), and beyond likelihood scoring: free-form English
+generation is preserved (MAUVE) and the image-generation distribution is
+essentially unmoved (Gen-CMMD $\sim\!1.7\times10^{-3}$). We locate where a cost
+first appears: in grounded visual understanding, at the strongest settings.
+\textbf{(iii)} A negative transfer result that we argue is the flip side of the
+same mechanism: the acquired language improves text-to-image faithfulness only
+marginally ($+0.47\pm0.25$ CLIPScore, $3\%$ of the English--Welsh gap) and leaves
+Welsh visual question answering at chance, where the model turns out not to be
+reading the Welsh question at all.
+\textbf{(iv)} Each adapter changes $0.6$ to $1.9\%$ of the backbone's weights,
+concentrated in the MLP and sparing attention. The target that needs the smallest
+update is not the one furthest from the base: Welsh reaches the largest
+perplexity reduction of the three text targets while moving the weights least
+($0.6\%$), suggesting the capability is unlocked rather than built.
+
+\section{Related Work}
+Continual learning is classically framed as a tension between retaining what a
+model can already do and acquiring something new, the stability--plasticity
+dilemma \citep{mermillod2013stability}, which remains the organizing question of
+the literature on deep networks \citep{delange2022survey, wang2024clsurvey}.
+Three families of remedy recur. \emph{Regularization} methods anchor the model to
+a reference, in weight space, L2-SP \citep{xuhong2018l2sp} and its
+Fisher-weighted form EWC \citep{kirkpatrick2017ewc}, or in function space,
+distillation \citep{hinton2015distilling} and Learning-without-Forgetting
+\citep{li2017lwf}. \emph{Replay and constraint} methods retain old data and
+forbid updates that would hurt it \citep{lopezpaz2017gem, chaudhry2019agem}.
+\emph{Parameter-isolation} methods instead give each task its own capacity and
+freeze or mask the rest \citep{rusu2016progressive, mallya2018packnet,
+serra2018hat}. Our setting inherits from the first and the third: we anchor the
+adapter to the frozen base in function space, and LoRA is itself a soft form of
+parameter isolation, a small added subspace that leaves the pretrained weights
+untouched. That is exactly why the interference it produces is worth measuring
+rather than assuming.
+
+What is already known bounds the problem without resolving it here. Forgetting in
+large pretrained models is real but scale- and method-dependent: it diminishes
+with model scale \citep{ramasesh2022scale}, and parameter-efficient methods learn
+less and forget less than full fine-tuning \citep{biderman2024lora}, with rank
+beyond a small value buying little \citep{zhang2024scalingmeetsfinetuning}. It has
+been documented empirically for language models under continual fine-tuning
+\citep{luo2023empirical} and for multimodal ones \citep{zhai2023investigating}.
+All of this, however, is measured \emph{within} a modality, or across tasks of the
+same kind. A complementary line reduces interference by routing among several
+adapters \citep{dou2024loramoe, wu2024mole, li2024mixlora}; those designs
+presuppose that plain LoRA interferes, without quantifying how much.
+
+The models that sharpen the question are the unified ones. Fully-tokenized native
+models \citep{chameleon2024, bachmann20244m21, lu2024unifiedio2} process all
+modalities in one sequence; Janus and Janus-Pro \citep{wu2024janus, januspro}
+decouple the visual encoders for understanding and generation while keeping a
+single shared backbone. PEFT has been applied to such models
+\citep{chern2024anole, serra2024narrowgate, wang2025vora}, but as a means to an
+end. To our knowledge, no prior work measures the cross-modal interference of
+plain PEFT in a unified multimodal model: what happens to image generation when
+the text stream is specialized, and to language, knowledge and visual
+understanding when image generation is. Supplying that measurement is the purpose
+of this paper. We neither modify the architecture nor propose a new adapter.
+
+\section{Setup}
+\label{sec:setup}
+\paragraph{Model, directions, and adapter.}
+We use Janus-Pro-7B \citep{januspro}: a SigLIP encoder for understanding and a
+VQ-VAE (codebook $16{,}384$, $576$ tokens per image) for generation, over one
+shared LLaMA-style transformer. It exposes three capability directions:
+text-to-text language modelling, image$+$text understanding, and text-to-image
+generation. LoRA is injected \emph{only} into the shared backbone
+($q,k,v,o,\texttt{gate},\texttt{up},\texttt{down}$), with $\alpha=2r$ fixed
+across the rank sweep; the encoders and heads are frozen. The generation forward
+traverses only the language-model tensors, while understanding additionally
+engages SigLIP.
+
+\paragraph{Controlling how far the adapter drifts: a KL term to the frozen base.}
+For both directions we optionally hold the adapter close to the frozen base.
+Writing $p_{\text{adapter}}(\cdot\mid x_{<t})$ for the adapted next-token
+distribution and $p_{\text{base}}(\cdot\mid x_{<t})$ for the \emph{same} model
+with the adapter disabled, the training loss is
+\begin{equation}
+\mathcal{L}=\underbrace{\mathrm{CE}\big(p_{\text{adapter}},y\big)}_{\text{acquire the target}}
++\lambda\,\frac{1}{T}\sum_{t=1}^{T}\underbrace{\mathrm{KL}\!\big(p_{\text{adapter}}(\cdot\mid x_{<t})\,\big\|\,\mathrm{sg}[p_{\text{base}}(\cdot\mid x_{<t})]\big)}_{\text{stay close to the base}} .
+\label{eq:kl}
+\end{equation}
+The reference is obtained for free by disabling the adapter, so no separate
+teacher is stored, and it is held constant by a stop-gradient. The single KL
+weight $\lambda$ sets how much the adapter may drift: $\lambda=0$ is plain
+fine-tuning, larger $\lambda$ keeps the adapter near the base. We use a
+function-space reference because the quantity to preserve is the model's output
+\emph{distribution}; an ablation against L2-SP, logit-MSE and the reconstruction
+objective of Anole \citep{chern2024anole} at matched update size supports the
+choice (Appendix~\ref{app:reg}).
+
+\paragraph{What we evaluate after adaptation.}
+We evaluate the directions we did not train with four standard benchmarks scored
+by log-likelihood only, hence deterministic and judge-free: WikiText-2 perplexity
+\citep{wikitext}, MMLU \citep{mmlu}, POPE \citep{pope} and MME \citep{mme}. The
+base POPE accuracy ($0.877$) matches the published Janus-Pro-7B value ($0.874$),
+validating the harness. Because likelihood benchmarks never exercise free-form
+decoding, we add two distributional generation metrics: MAUVE
+\citep{pillutla2021mauve} for text, and, for the image direction under a text
+adapter, the CMMD \citep{cmmd} between the adapter's and the base's generations
+on a fixed prompt set (Gen-CMMD).
+
+\paragraph{What we mean by retention.}
+We call a capability \emph{retained} when the adapter's score on it is within
+evaluation noise of the base's. We apply this symmetrically: a large movement is
+a behavioural change whatever its sign, so the cases where a score moves
+substantially in the \emph{favourable} direction (general-text perplexity, and
+MAUVE-vs-base for the medicine adapter) are flagged as changes and analysed
+separately in \S\ref{sec:dw}, not counted as evidence of stability. What these
+benchmarks can and cannot detect is discussed in \S\ref{sec:boundary} and in the
+Limitations.
+
+\paragraph{Choosing targets the base cannot already do.}
+As argued in the introduction, certifying that nothing was forgotten is
+uninformative if the target was already within the base model's reach. We
+therefore score each candidate target by $\times$control: the base model's
+perplexity on that corpus divided by its perplexity on a fixed English control.
+On this common scale the three text targets are poetry (Project Gutenberg) at
+$4.0\times$, Welsh (\texttt{wikimedia/wikipedia}, Welsh subset) at $2.3\times$,
+and medical abstracts (\texttt{ccdv/pubmed-summarization}) at $1.2\times$; Welsh
+was selected from a wider set of low-resource and constructed languages
+(Appendix~\ref{app:langprobe}). The
+three therefore differ in \emph{kind}, a register, a language and a domain,
+rather than lying on one ordered axis of difficulty, and we will see
+(\S\ref{sec:text}) that $\times$control predicts neither how much is acquired nor
+how far the weights move. Poetry and medicine were scored in one probe run and
+Welsh in another, with the same construction and control corpus. For images we
+use a narrow anime style (\texttt{lambdalabs/naruto-blip-captions}, $1{,}141$
+pairs) that the base renders weakly, and black-and-white line sketches
+(\texttt{zoheb/sketch-scene}). Image acquisition is scored against real style
+images with CMMD \citep{cmmd} as the headline, with KID \citep{kid}, DINOv2
+\citep{dinov2}, CLIP-IQA \citep{clipiqa} and CLIP directional similarity
+\citep{stylegannada} as complements. Full hyperparameters are in
+Appendix~\ref{app:impl}. All numbers are single-seed; standard errors quantify
+evaluation-set sampling noise at fixed weights (Appendix~\ref{app:impl}).
+
+\section{Results}
+We adapt one direction at a time and evaluate every other direction.
+Section~\ref{sec:gen} adapts image generation and evaluates text, knowledge and
+understanding; Section~\ref{sec:text} adapts language modelling and evaluates
+knowledge, understanding and the image-generation distribution. Together the two
+form the off-diagonal of a retention matrix over the model's directions.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/janus_comparison/no_adapter/human_05_natural.png}
+\caption*{\footnotesize Base}
+\end{subfigure}
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/janus_comparison/adapter_solo_gen/human_05_natural.png}
+\caption*{\footnotesize Image LoRA}
+\end{subfigure}
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/janus_comparison/no_adapter/human_07_natural.png}
+\caption*{\footnotesize Base}
+\end{subfigure}
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/janus_comparison/adapter_solo_gen/human_07_natural.png}
+\caption*{\footnotesize Image LoRA}
+\end{subfigure}
+\caption{The intervention is real: style acquisition on two held-out prompts
+(``a young man with blonde spiky hair'', ``an old wizard with a long white
+beard''), base versus adapter at identical seeds. Full grids in
+Appendix~\ref{app:grids}.}
+\label{fig:teaser}
+\end{figure}
+
+\subsection{Adapting the generation direction}
+\label{sec:gen}
+We fine-tune generation to a final configuration ($r=48$, attention and MLP
+LoRA, $\lambda=0.5$; the incremental ablation reaching it is in
+Appendix~\ref{app:ablation}). The adapter acquires the style
+(Figure~\ref{fig:teaser}).
+
+Table~\ref{tab:rank} sweeps the rank from $2$ to $64$, i.e.\ the adapter's
+capacity to change the shared backbone. Acquisition improves and saturates
+(CMMD $0.139\to0.097$, directional similarity $0.143\to0.158$, knee around rank
+$16$ to $32$), while every untrained capability stays at the base level across
+the whole range: WikiText perplexity moves within $0.07$ of the base, MMLU, POPE
+and MME within sampling noise. More capacity refines acquisition at no measurable
+cost to the other modalities. We replicate this on a second, unrelated visual
+style (line sketches, Appendix~\ref{app:sketch}); we flag now, rather than leave
+to the appendix, that this second style produces the largest footprint of all
+five targets and is one of the three settings analysed in \S\ref{sec:boundary}.
+
+\begin{table}[t]
+\caption{\textbf{Adapting image generation: rank sweep.} Acquisition (bold =
+best) improves and saturates, while every untrained capability stays at the base
+level at all ranks. Base POPE ($0.877$) matches the published value ($0.874$).
+The base has no directional similarity by construction (DirSim measures the
+change away from the base), and its CMMD to the style reference was not computed
+in this sweep; Table~\ref{tab:sketch} reports a base CMMD for the second style.
+Standard errors are evaluation-set sampling errors and depend on the size of the
+evaluation set, not on the adapter, so they are effectively constant along each
+row and are given once in the row label rather than in every cell.}
+\label{tab:rank}
+\centering\small
+\begin{tabular}{lccccccc}
+\toprule
+& Base & $r{=}2$ & $r{=}4$ & $r{=}8$ & $r{=}16$ & $r{=}32$ & $r{=}64$ \\
+\midrule
+\multicolumn{8}{l}{\emph{Acquisition} (vs.\ real style images)}\\
+CMMD $\downarrow$        & n/a & .139 & .124 & .126 & .105 & .108 & \textbf{.097} \\
+CLIP DirSim $\uparrow$   & n/a & .143 & .142 & .143 & .154 & .153 & \textbf{.158} \\
+\midrule
+\multicolumn{8}{l}{\emph{Untrained capabilities}}\\
+WikiText PPL $\downarrow$ \tiny($\pm.21$) & 13.71 & 13.66 & 13.70 & 13.76 & 13.74 & 13.78 & 13.76 \\
+MMLU $\uparrow$ \tiny($\pm.013$)          & .492 & .491 & .491 & .491 & .501 & .497 & .489 \\
+POPE acc $\uparrow$ \tiny($\pm.006$)      & .877 & .879 & .881 & .878 & .878 & .879 & .878 \\
+MME $\uparrow$ \tiny($\pm31$)             & 1785 & 1777 & 1777 & 1786 & 1786 & 1796 & 1781 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Adapting the language-modelling direction}
+\label{sec:text}
+We now specialize text on three targets that differ in kind: a register
+(poetry), a domain (medicine) and a language (Welsh). For each we report
+acquisition together with the untrained capabilities and the image-generation
+shift.
+
+\paragraph{Sweeping the KL weight.}
+Table~\ref{tab:textkl} sweeps $\lambda$ at rank $16$ on poetry. Acquisition is
+strongest with little regularization and weakens monotonically as the adapter is
+held closer to the base (poetry perplexity $24.5$ at $\lambda=0$ rising to
+$26.7$ at $\lambda=1.5$), the expected trade between acquiring and preserving.
+Knowledge and POPE stay flat. Crucially, the bottom row shows the \emph{other
+modality}: Gen-CMMD stays flat and near zero ($\sim\!1.7\times10^{-3}$) at every
+$\lambda$, including $\lambda=0$, where the text objective is entirely
+unconstrained. Even with no KL term at all, specializing the text stream does not
+measurably move the image-generation distribution. Appendix~\ref{app:t2itext}
+shows the same conclusion qualitatively, and Appendix~\ref{app:textsweep} reports
+the complementary rank sweep on this target.
+
+\begin{table}[t]
+\caption{\textbf{Adapting text (poetry): KL sweep at rank 16.} Acquisition (bold
+= best) is strongest at low $\lambda$ and weakens as the KL term tightens. MMLU
+and POPE stay flat; MME shows a small dip at $\lambda=0$ (see
+\S\ref{sec:boundary}). \emph{Gen-CMMD} is the CMMD between the adapter's and the
+base's image generations on a fixed prompt set ($N{=}128$): it stays near zero at
+every $\lambda$, so the text adapter does not measurably shift image generation.
+Text runs use a subsampled evaluation configuration, so absolute values are
+comparable within the table, against the base column, not against
+Table~\ref{tab:rank}; the smaller evaluation sets are why the standard errors are
+larger here. As in Table~\ref{tab:rank}, standard errors depend on the evaluation
+set rather than the adapter and are given once per row.}
+\label{tab:textkl}
+\centering\small
+\begin{tabular}{lcccccc}
+\toprule
+& Base & $\lambda{=}0$ & $\lambda{=}0.25$ & $\lambda{=}0.5$ & $\lambda{=}1$ & $\lambda{=}1.5$ \\
+\midrule
+\multicolumn{7}{l}{\emph{Acquisition} (target style)}\\
+Poetry PPL $\downarrow$ & 32.7 & \textbf{24.5} & \textbf{24.5} & 24.9 & 25.9 & 26.7 \\
+\midrule
+\multicolumn{7}{l}{\emph{Untrained capabilities}}\\
+WikiText PPL $\downarrow$ \tiny($\pm.21$) & 13.71 & 12.61 & \underline{12.50} & 12.51 & 12.75 & 12.93 \\
+MMLU $\uparrow$ \tiny($\pm.021$)          & .481 & .474 & .481 & .479 & .475 & .483 \\
+POPE acc $\uparrow$ \tiny($\pm.010$)      & .875 & .868 & .870 & .871 & .878 & .873 \\
+MME $\uparrow$ \tiny($\pm42$)             & 1130 & 1101 & 1116 & 1128 & 1127 & 1128 \\
+\midrule
+\multicolumn{7}{l}{\emph{Shift in the other modality}}\\
+Gen-CMMD $\downarrow$ ($\times10^{-3}$) & 0 & 1.73 & 1.71 & 1.73 & 1.77 & 1.65 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{A domain and a language.}
+Poetry and medicine both lie inside the base's competence (poetic English,
+medical English), so the absence of forgetting could still be attributed to a
+weak intervention. We therefore add a target the base barely speaks: Welsh.
+Table~\ref{tab:targets} reports both. Medicine is acquired strongly (held-out
+PubMed perplexity $12.8\to8.4$; on the $\times$control scale the domain moves
+from $1.2\times$, harder than generic English, to $0.79\times$, easier), and
+Welsh more strongly still (held-out perplexity $40.7\to14.6$, $-64\%$); on Welsh
+seeds the adapter sustains Welsh where the base slips into English or its
+assistant persona (Appendix~\ref{app:welsh}). Qualitative examples for medicine
+are in Appendix~\ref{app:medicine}. In both cases the untrained capabilities stay
+at base level and Gen-CMMD stays at the same $\sim\!1.7\times10^{-3}$ order as
+poetry.
+
+Two observations sharpen the picture. First, \emph{distance from the base
+predicts neither outcome}. On the common $\times$control scale Welsh ($2.3\times$)
+sits between poetry ($4.0\times$) and medicine ($1.2\times$), yet it produces the
+largest perplexity reduction of the three and needs the \emph{smallest} weight
+change ($\lVert\Delta W\rVert/\lVert W\rVert=0.6\%$, versus $1.3\%$ for poetry
+and $1.7\%$ for medicine), despite the weakest KL term ($\lambda=0.1$). How
+unfamiliar a corpus looks to the base model therefore tells us little about how
+much of the network has to move to fit it; the new language appears to be
+unlocked rather than built, i.e.\ partly latent in the pretrained backbone.
+Second, under the adapter, English prompts are still continued in English, so the
+language is added without overwriting the existing one.
+
+This is a shift of the output distribution, not competence: the samples
+(Appendix~\ref{app:welsh}) sustain Welsh morphology and register where the base
+does not, but remain locally repetitive under greedy decoding. We read the
+retention result against that weaker premise.
+
+\begin{table}[t]
+\caption{\textbf{A distant domain and a new language.} Medicine and Welsh are
+each acquired strongly while every untrained capability stays at base level and
+image generation is essentially unchanged. The two targets use different
+evaluation configurations (full for medicine, subsampled for Welsh), so their
+base columns differ in absolute value; each comparison is within its own pair of
+columns. Errors are one standard error from evaluation-set resampling. Entries
+marked n/a are metrics defined only for the other target.}
+\label{tab:targets}
+\centering\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{Medicine ($r{=}32$, $\lambda{=}0.25$)}
+& \multicolumn{2}{c}{Welsh ($r{=}32$, $\lambda{=}0.1$)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+& Base & LoRA & Base & LoRA \\
+\midrule
+\multicolumn{5}{l}{\emph{Acquisition}}\\
+PubMed PPL $\times$control $\downarrow$ & 1.23$\times$ & \textbf{0.79$\times$} & n/a & n/a \\
+Welsh held-out PPL $\downarrow$         & n/a & n/a & 40.7 & \textbf{14.6} \\
+$\lVert\Delta W\rVert/\lVert W\rVert$   & --- & 1.7\% & --- & 0.6\% \\
+\midrule
+\multicolumn{5}{l}{\emph{Untrained capabilities}}\\
+WikiText PPL $\downarrow$ & 13.71\,$\pm$.21 & 13.97\,$\pm$.21 & 13.71\,$\pm$.21 & 12.07\,$\pm$.18 \\
+MMLU $\uparrow$           & .492\,$\pm$.013 & .495\,$\pm$.013 & .481\,$\pm$.021 & .479\,$\pm$.016 \\
+POPE acc $\uparrow$       & .877\,$\pm$.006 & .877\,$\pm$.006 & .875\,$\pm$.010 & .876\,$\pm$.010 \\
+MME $\uparrow$            & 1785\,$\pm$31   & 1766\,$\pm$32   & 1130\,$\pm$42   & 1124\,$\pm$42 \\
+\midrule
+\multicolumn{5}{l}{\emph{Shift in the other modality}}\\
+Gen-CMMD $\downarrow$ ($\times10^{-3}$) & 0 & 1.77 & 0 & 1.73 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Beyond likelihood: free-form generation}
+The four benchmarks score multiple-choice and log-likelihood items, never
+free-form decoding, so a generative degradation could hide behind flat
+likelihood numbers. We close that gap with MAUVE \citep{pillutla2021mauve}, the
+text counterpart of our image CMMD (Table~\ref{tab:mauve}). Three readings
+follow. \emph{Cross-modal}: the image adapters generate free English essentially
+identical to the base (MAUVE-vs-base $0.95$/$0.92$), the generative analogue of
+their near-zero Gen-CMMD. \emph{Text, with one caveat}: no adapter's free English
+falls below the base against human text, and the text adapters raise it
+($0.60$--$0.77$), so none of them degrades English relative to the human
+reference. The medicine adapter's MAUVE-vs-base of $0.21$ is nonetheless a large
+distributional change: its free English is far from the base's while being closer
+to human text. By our definition (\S\ref{sec:setup}) that is a behavioural
+change, not retention; what the two columns jointly rule out is degradation.
+\emph{Acquisition}: the text adapters move far closer to the target distribution
+than the base (poetry $0.45\to0.80$, medical abstracts $0.31\to0.91$, Welsh
+$0.14\to0.67$), confirming acquisition at the generation-distribution level and
+not only in perplexity. Appendix~\ref{app:textqual} shows the corresponding
+poetry continuations.
+
+\begin{table}[t]
+\caption{\textbf{Free-form generation (MAUVE)} \citep{pillutla2021mauve}
+($[0,1]$, higher = closer; $N\!\le\!2000$, GPT-2-large features). \emph{English
+vs.\ base}: image adapters are indistinguishable from the base. \emph{English
+vs.\ human}: no adapter falls below the base ($0.38$); text adapters raise it.
+\emph{Target acquisition}: text adapters move far closer to the target. Base
+continuations are coherent English, not degenerate (Appendix~\ref{app:mauve}).
+MAUVE is a divergence between two sets of $N\!\le\!2000$ generations and has no
+closed-form standard error; we therefore report it without one and read only
+differences larger than the $0.1$ scale on which the entries here separate.}
+\label{tab:mauve}
+\centering\small
+\begin{tabular}{lccc}
+\toprule
+Adapter & English & English & Target acq. \\
+        & vs.\ human & vs.\ base & base\,$\to$\,adapter \\
+\midrule
+Base (reference)        & 0.38 & --- & --- \\
+Anime, image (Final)    & 0.52 & 0.95 & --- \\
+Sketch, image           & 0.46 & 0.92 & --- \\
+Poetry                  & 0.70 & 0.83 & 0.45\,$\to$\,0.80 \\
+Medicine                & 0.60 & 0.21 & 0.31\,$\to$\,0.91 \\
+Welsh                   & 0.77 & 0.68 & 0.14\,$\to$\,0.67 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Where a cost first appears}
+\label{sec:boundary}
+
+\paragraph{First, do our measures move at all?}
+A result of the form ``nothing changed'' is only worth reading if the
+instruments can register change, so before looking for a boundary we check that
+they do. Table~\ref{tab:joint} reports a control in which a text stream is
+alternated into the image adapter at three corpus sizes. When the text corpus is
+small, held-out perplexity inflates dramatically, from $13.71$ at base to
+$47.87$ and $55.10$, roughly $60$ standard errors, while the same adapter trained
+on a large distant corpus leaves it at $12.46$. The inflation therefore tracks
+corpus size, a small corpus being revisited and over-fit, and not domain
+distance; the point for us is that the perplexity measure is far from inert, and
+that a naive protocol could easily have mistaken this artefact for forgetting.
+Knowledge and understanding stay flat even here, which is the first hint that
+they are harder to move than perplexity, and also the reason we treat their
+flatness elsewhere with more caution than perplexity's.
+
+\begin{table}[t]
+\caption{\textbf{Sensitivity control.} A text stream alternated into the image
+adapter at three corpus sizes. Held-out perplexity moves by tens of standard
+errors when the text corpus is small, so the measure is not inert; the movement
+tracks corpus size rather than domain distance. Knowledge and understanding are
+unaffected throughout. Full evaluation configuration, single seed.}
+\label{tab:joint}
+\centering\small
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Condition} & \textbf{Text corpus} & \textbf{PPL}$\downarrow$ & \textbf{MMLU}$\uparrow$ & \textbf{POPE acc}$\uparrow$ & \textbf{MME}$\uparrow$ \\
+ & & \tiny($\pm.21$) & \tiny($\pm.013$) & \tiny($\pm.006$) & \tiny($\pm31$) \\
+\midrule
+Base (no adapter) & ---                  & $13.71$ & $0.492$ & $0.877$ & $1785$ \\
+Final (image-only)& ---                  & $13.80$ & $0.491$ & $0.879$ & $1789$ \\
+Joint matched     & near, 320 chunks     & $47.87$ & $0.505$ & $0.876$ & $1747$ \\
+Joint far         & distant, 7672 chunks & $12.46$ & $0.491$ & $0.878$ & $1795$ \\
+Joint far@320     & distant, 320 chunks  & $55.10$ & $0.481$ & $0.873$ & $1736$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Where the limit is.}
+Reporting only preserved capabilities would say nothing about where the limit
+is, so we deliberately searched for the settings that break it. Three
+independent settings, each at the strongest end of adaptation, show a movement
+in the same direction and in the same measure, grounded visual understanding
+(MME), while knowledge and language stay flat:
+(i) at $\lambda=0$, the unregularized poetry adapter, MME $1130\to1101$
+(Table~\ref{tab:textkl}), which the KL term removes;
+(ii) pushing poetry to rank $128$, well past the acquisition knee, buys almost
+nothing ($23.8\to23.2$) while MME moves $1122\to1105$ and POPE $0.877\to0.867$;
+(iii) the hardest visual style, line sketches, is the only target for which the
+footprint is uniformly larger than the others, most visibly on MME
+($1785\to1713$; Appendix~\ref{app:sketch}).
+
+Each movement lies within roughly one to two standard errors of the difference,
+and all runs are single-seed, so none is individually conclusive; their agreement
+in sign is equally consistent with a systematic property of MME, which has the
+widest dynamic range of our four measures. We report the pattern as an
+indication of where to look, not as a finding. What would settle it is set out in
+the Limitations.
+
+\subsection{The flip side: what is learned does not cross modalities}
+Localized adaptation is usually reported as good news. We show it has a
+symmetric cost. Having acquired Welsh in the text direction, can the model
+\emph{act} on Welsh in the visual directions? This is a transfer question, not a
+retention one: the base is expected to fail on Welsh because it barely knows it,
+so any gain must come from the adapter (protocol in Appendix~\ref{app:xmodal}).
+
+Transfer was mechanistically plausible here, which is why the negative answer is
+worth reporting. Janus' image-generation forward pass traverses the same
+language-model tensors that the adapter modifies, so a text-side update reaches
+the generation pathway by construction; nothing in the architecture prevents a
+representation acquired in text from conditioning image tokens. A reader who
+accepts that a shared backbone carries shared representations should expect at
+least partial transfer. We find instead that the pathway is architecturally open
+and functionally unused.
+
+Table~\ref{tab:xmodal} shows the answer is essentially no. Generating images from
+Welsh prompts, the adapter improves CLIPScore against the same English reference
+only marginally over the base ($10.6\to11.0$, $+0.47\pm0.25$, $20/30$ prompts
+improved), which closes just $3\%$ of the English--Welsh gap ($15.8$) and stays
+far from English-prompt faithfulness. On Welsh visual question answering there is
+no transfer at all: on $28$ balanced yes/no items the base scores $53.6\%$ and
+the adapter $50.0\%$, both indistinguishable from chance ($95\%$ Wilson intervals
+$[36,70]$ and $[33,67]$), against $100\%$ in English for both. The failure is not
+a matter of degree. On the Welsh items the base answers ``yes'' to $11$ of the
+$14$ questions whose correct answer is ``no'', while answering $12$ of $14$
+``yes'' items correctly: it is not reading the Welsh question at all, and falls
+back on a response bias that a balanced item set converts into chance-level
+accuracy. The English controls are unchanged, so the probe is sound and the
+adapter has damaged nothing. Cross-modal grounding of a new language would
+require paired image--text data; text-only post-training cannot supply it. The
+adapter is localized to the text stream in exactly the sense that protects the
+other modalities, and for exactly the same reason it cannot serve them.
+
+\begin{table}[t]
+\caption{\textbf{Cross-modal transfer of the acquired language.} On the English
+control columns the adapter matches the base, so the probes are sound. On the
+Welsh columns the adapter improves text-to-image faithfulness only marginally and
+Welsh VQA not at all; both VQA scores are within the $95\%$ Wilson interval of
+chance on $n{=}28$ balanced yes/no items. On the Welsh side of (A) the
+adapter--base difference is $+0.47\pm0.25$ over $30$ paired prompts. Text-only
+acquisition does not reach the visual pathway.}
+\label{tab:xmodal}
+\centering\small
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{Base} & \multicolumn{2}{c}{Welsh LoRA} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+& English & Welsh & English & Welsh \\
+\midrule
+(A) text$\to$image, CLIPScore $\uparrow$ ($n{=}30$) & 26.4 & 10.6 & 26.6 & 11.0 \\
+(B) VQA accuracy $\uparrow$ ($n{=}28$)              & 100\% & 53.6\% & 100\% & 50.0\% \\
+\quad\tiny 95\% Wilson interval & \tiny[88,100] & \tiny[36,70] & \tiny[88,100] & \tiny[33,67] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{How large is the intervention?}
+\label{sec:dw}
+A sceptical reading of everything above is that nothing is forgotten because
+nothing is changed. The size of the updates rules that out
+(Appendix~\ref{app:dw}). We summarize each update
+$\Delta W=(\alpha/r)BA$ by $\lVert\Delta W\rVert_F/\lVert W\rVert_F$, the size of
+the update relative to the weights it modifies, a task-vector magnitude
+\citep{ilharco2023task}. It is small but real, $0.6$ to $1.9\%$, and it is
+\emph{ordered} in both knobs and both directions: rising with rank (image
+$0.58\%$ at $r{=}2$ to $1.91\%$ at $r{=}64$; text $0.67$ to $1.66\%$), shrinking
+as the KL weight grows (image $1.55$ to $1.33\%$; text $1.15$ to $0.80\%$). These
+sub-$2\%$ updates already shift behaviour
+substantially (poetry perplexity $32.7\to23.8$; visible style transfer,
+Figure~\ref{fig:teaser}) while the other modality stays flat. Per-module heatmaps
+(Appendix~\ref{app:dw}) show the change is localized: the attention $q/k/v$
+projections are nearly untouched and the update concentrates in the MLP, broadly
+over \texttt{gate} for text and toward the final layer's \texttt{down} for image.
+The global percentage therefore understates the local effect, and the two
+directions differ in \emph{where} they write.
+
+\paragraph{An anomaly we report but do not explain.}
+General-text perplexity falls consistently \emph{below} the base after text
+adaptation, across ranks, KL weights and all three targets (e.g.\
+$13.71\to12.07$ for Welsh), corroborated by the higher MAUVE of the adapters'
+free English. We have no confirmed mechanism, and distinguishing the candidates
+requires multi-seed runs we have not done, so we report it as an observation and
+build no claim on it (Appendix~\ref{app:anomaly}).
+
+\section{Discussion}
+\paragraph{Localization is a trade, not a free lunch.}
+Read together, our two main results are the same phenomenon seen from two sides.
+A small, MLP-localized update in the shared backbone is enough to acquire a
+poetic register, a medical domain, or a new language, and it leaves the other
+capability directions at base level, on the four benchmarks, in free-form text,
+and in the image-generation distribution. That same localization is why the
+acquired language cannot be used through the visual pathway. Practitioners who
+post-train a unified model can take the first half as reassurance and must take
+the second half as a design constraint: if a new capability is to be available in
+more than one modality, the evidence here says it has to be trained there,
+because it will not arrive by itself.
+
+\paragraph{The KL weight controls drift, not reach.}
+The KL term behaves as expected, trading acquisition for preservation
+monotonically, and it removes the one movement we could induce ($\lambda=0$,
+Table~\ref{tab:textkl}). But it is orthogonal to the transfer question: at every
+$\lambda$, including $\lambda=0$, Gen-CMMD is flat, so no setting of it makes the
+text update reach the image pathway. How far the model drifts and how far what it
+learns travels are controlled by different things.
+
+\paragraph{Limitations.}
+Our evidence comes from a single unified model, Janus-Pro-7B, whose
+understanding and generation encoders are \emph{decoupled} over a shared
+backbone; because LoRA acts only on that backbone, the generation pathway is
+partly insulated by construction, which may itself be part of why adaptation
+stays localized. Our protocol is also a \emph{single} adaptation step from a
+pretrained checkpoint, not a sequence of tasks: we measure interference between
+capabilities that coexist in one checkpoint, which is the sub-problem of
+continual learning that unified multimodal models make acute, but it is not
+sequential continual learning, and we use ``transfer'' in that restricted sense
+rather than in the task-sequence sense of \citet{lopezpaz2017gem}. Chaining our
+three text targets into one adapter and re-measuring each after every step is the
+natural extension and the one we would run next. Whether our conclusions hold for
+fully-tokenized early-fusion models (e.g.\ Chameleon), where a single token
+stream shares all weights, is untested and is the central open question; we could
+not include such models here because their generation is either disabled in the
+public release (Chameleon) or inference-only with inaccessible weights (Anole),
+the very constraint that motivated our choice of Janus. We do not vary the base
+model or its scale.
+
+Our central claim is a negative one, and single-seed evidence cannot establish
+it. The standard errors we report throughout are evaluation-set sampling errors
+at fixed weights; they do not capture run-to-run variance, which is precisely the
+quantity a null result requires. Two experiments would convert what we can only
+indicate into a measurement: repeated seeds, and a control in which forgetting is
+deliberately induced, showing that these measures move when a capability is
+genuinely damaged. Relatedly, our four benchmarks were not selected for
+sensitivity to cross-modal damage, because no prior protocol establishes what
+such damage looks like in a unified model; the check in Table~\ref{tab:joint}
+shows only that perplexity is not inert, and the small movements of
+\S\ref{sec:boundary} are suggestive rather than established. Our results should
+therefore be read as a failure to detect cross-modal forgetting under this
+protocol rather than as a demonstration of its absence. The general-text
+improvement is likewise unexplained. Our comparison of anti-forgetting objectives is
+scoped to forgetting mitigation; orthogonal adaptation-capacity variants such as
+DoRA \citep{liu2024dora} and multi-adapter routing are out of scope. Finally,
+free-form quality is assessed distributionally rather than by a human study.
+
+\section{Conclusion}
+We measured cross-modal catastrophic forgetting under parameter-efficient
+post-training of a unified multimodal model, choosing every adaptation target by
+how poorly the base model already handles it so that preservation is certified
+against a real intervention. Across two directions, five targets, LoRA ranks $2$
+to $128$ and KL weights $\lambda\in[0,1.5]$, the capabilities we did not train
+stay at base level within evaluation noise, including under a strong
+distributional shift toward a language the base barely modelled, and including in
+free-form generation, which likelihood benchmarks do not test. Where a cost
+appears at all it is small, confined to grounded visual understanding, and
+reachable only at the strongest settings. The same localization that delivers
+this stability also confines what is learned: the newly acquired language does
+not transfer to the visual pathway, although the architecture leaves that pathway
+open. The next steps we consider most valuable are repeated seeds and an
+induced-forgetting control, which would turn a failure to detect forgetting into
+a measurement of its absence, followed by a sequential version of this protocol
+and replication on a fully-tokenized early-fusion model, where the insulation our
+conclusions may partly rest on is absent.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+\appendix
+
+\section{Implementation details}
+\label{app:impl}
+
+\paragraph{Model.}
+All experiments use Janus-Pro-7B (\texttt{deepseek-community/Janus-Pro-7B}),
+loaded in \texttt{bfloat16} via the Hugging Face
+\texttt{JanusForConditionalGeneration} class. Janus-Pro is a unified
+autoregressive model with a shared transformer backbone and \emph{decoupled}
+modality encoders: a SigLIP vision encoder for understanding (image$\to$text) and
+a separate vector-quantized (VQ) tokenizer with an image head for generation
+(text$\to$image), where an image is a $24\times24=576$ grid of discrete tokens
+from a codebook of size $16384$. We use the two directions through the
+processor's text mode (text language modelling) and image mode
+(\texttt{max\_new\_tokens}$=576$ then VQ decoding). LoRA is applied \emph{only} to
+the shared backbone; the SigLIP and VQ encoders/heads are frozen, which is what
+makes the modality-localized weight analysis of Appendix~\ref{app:dw}
+meaningful.
+
+\paragraph{LoRA configuration (fixed across all runs).}
+Every adapter targets the seven projections of each backbone layer---%
+\texttt{q,k,v,o\_proj} (attention) and \texttt{gate,up,down\_proj} (MLP), with
+$\alpha=2r$ (so the LoRA scaling $\alpha/r=2$ is constant across the rank sweep),
+\texttt{bias=none}, causal-LM task type, and no rsLoRA; the induced update is
+$\Delta W=(\alpha/r)BA$. Only the swept variable (rank $r$ or KL weight $\lambda$)
+changes within a sweep.
+
+\paragraph{Optimization (common).}
+AdamW with $\beta=(0.9,0.95)$ (matching the Janus pre-training $\beta_2$) and zero
+weight decay, a cosine schedule with $5\%$ warmup, gradient accumulation $8$,
+gradient clipping $1.0$, \texttt{bfloat16}, single H100. With the regularizer the
+loss is
+$\mathcal{L}=\mathrm{CE}+\lambda\,\mathrm{KL}(p_{\text{adapter}}\|p_{\text{base}})$,
+where $p_{\text{base}}$ is a \texttt{disable\_adapter()} no-grad forward on the
+same inputs ($\approx$$2\times$ forward cost).
+
+\paragraph{Uncertainty quantification.}
+We report each number as $\text{mean}\pm$ one standard error, computed without
+retraining and with an estimator-appropriate method per metric type. The accuracy
+benchmarks (MMLU, POPE, MME) are proportions of correct items over a fixed
+evaluation set, so their standard error follows the binomial/Wilson form
+\citep{wilson1927,brown2001interval}. Per-instance metrics averaged over the
+generated set (CLIP directional similarity, DINO similarity, CLIP-IQA) use
+$s/\sqrt{n}$ over the $n$ generations, equivalently a nonparametric bootstrap
+\citep{efron1993bootstrap}. The set-level distributional metrics (CMMD, KID) have
+no closed-form variance, so their standard error is the standard deviation of a
+nonparametric bootstrap over the generated and reference sets ($B{=}2000$
+resamples) \citep{efron1993bootstrap,binkowski2018demystifying}. Perplexity is a
+monotone transform of the mean per-chunk negative log-likelihood, whose standard
+error propagates through the exponential. All standard errors quantify
+evaluation-set sampling noise at fixed model weights; they do not capture
+training-seed variance. The small benchmark movements we observe (e.g.\ MMLU
+$0.492\!\to\!0.479$, within $\sim\!1$ standard error) thus lie within sampling
+noise, whereas the acquisition shifts (e.g.\ CMMD, DirSim) do not. This is the
+basis for the cautious reading of the boundary settings in
+Section~\ref{sec:boundary}.
+
+\paragraph{Text (poetry) runs.}
+Data: \texttt{biglam/gutenberg-poetry-corpus}, grouped by source document with
+front-matter removed and windowed to $512$ tokens ($6000$ train / $200$ val
+windows). Fixed: $r{=}16$, $\alpha{=}32$, dropout $0.05$, LR $10^{-4}$, $3$
+epochs ($150$-min wall-clock budget). Rank sweep: $r\in\{4,8,16,32,64\}$ at
+$\lambda{=}0.5$; $\lambda$ sweep: $\lambda\in\{0,0.25,0.5,1,1.5\}$ at $r{=}16$.
+
+\paragraph{Image (Naruto) runs.}
+Data: \texttt{lambdalabs/naruto-blip-captions} ($\approx$$1141$ image--caption
+pairs); acquisition on $80$ held-out prompts. Final configuration
+(Table~\ref{tab:panel}): $r{=}48$, $\alpha{=}96$, dropout $0.10$, LR $10^{-4}$,
+$6$ epochs, no caption prefix, $\lambda{=}0.5$. Rank sweep:
+$r\in\{2,\dots,64\}$ at $\lambda{=}0.5$; $\lambda$ sweep at $r{=}32$.
+
+\paragraph{Medicine, Welsh and sketch runs.}
+Medicine: \texttt{ccdv/pubmed-summarization}, $r{=}32$, $\alpha{=}64$,
+$\lambda{=}0.25$. Welsh: \texttt{wikimedia/wikipedia} (Welsh subset), $r{=}32$,
+$\alpha{=}64$, $\lambda{=}0.1$, $3$ epochs. Sketch: \texttt{zoheb/sketch-scene},
+identical configuration to the Naruto Final run ($r{=}48$, $\alpha{=}96$,
+$\lambda{=}0.5$, LR $10^{-4}$, $6$ epochs). All three share the common
+optimization settings above.
+% TODO FC: add LR / epochs / corpus size for medicine, and MAX_DOCS /
+% TRAIN_WINDOWS for Welsh, from the SLURM run scripts.
+
+\paragraph{Prompts and image generation.}
+Janus generates images autoregressively from a natural-language prompt
+(text$\to$image); every generated image in this paper is therefore conditioned on
+an explicit text prompt. During training the conditioning text is the dataset's
+BLIP caption; the \textit{Capacity} and \textit{+KL} configurations prepend a
+fixed style trigger (``anime sprite in Naruto style, ''), which \textit{Scaled}
+and \textit{Final} remove, so the Final adapter applies the style
+\emph{unconditionally}, with no trigger token at inference. Acquisition metrics
+(Table~\ref{tab:panel}) are computed on images generated from $80$ held-out Naruto
+captions. The qualitative grids instead use a fixed, curated set of generic
+natural-language prompts mixing in-domain and clearly out-of-domain subjects
+(e.g.\ ``a young man with blonde spiky hair'', ``a samurai warrior holding a
+katana'', ``an old wizard with a long white beard''), chosen to test whether the
+style transfers to arbitrary content; the exact prompt is printed beneath each row
+of every grid (Figures~\ref{fig:janus_qualitative_comparison},
+\ref{fig:rank_visual}, \ref{fig:kl_visual}). The cross-modal check under the text
+adapter (Figure~\ref{fig:t2i_text_kl}) uses four neutral prompts (e.g.\ ``a cat
+sitting on a chair''). All conditions share the same seed schedule, so within a
+row the adapter is the only source of variation.
+
+
+\section{Selecting the language target}
+\label{app:langprobe}
+Before training anything, we scored candidate language targets by
+$\times$control: the base model's perplexity on the candidate corpus divided by
+its perplexity on an English WikiText control (control perplexity $14.22$ under
+this probe's chunking). Candidates were real, available corpora: low-resource
+natural languages via Wikipedia, and a synthetic substitution-cipher language
+built from English as a maximally distant anchor. Table~\ref{tab:langprobe}
+reports the result.
+
+We did not take the most distant candidate. The cipher is by far the furthest
+($10.3\times$), but it is a deterministic character-level remapping of English:
+an adapter can fit it by learning the substitution table, which would make the
+resulting ``acquisition'' a shortcut rather than a new linguistic capability.
+Klingon is marginally further than Welsh ($2.51\times$ vs.\ $2.34\times$) but its
+available corpus is a few thousand short sentences, too small to separate
+acquisition from memorization at our training budget. Welsh combines a genuine
+distance from the base with an abundant, naturally occurring corpus, which is why
+we selected it.
+
+\begin{table}[h]\centering\small
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{lccl}
+\toprule
+Candidate & Base PPL & $\times$control & Note \\
+\midrule
+Cipher (substitution) & $146.8$ & $10.33$ & deterministic remapping of English \\
+Klingon               & $35.7$  & $2.51$  & constructed; corpus too small \\
+\textbf{Welsh}        & $33.3$  & $\mathbf{2.34}$ & \textbf{selected}: distant and abundant \\
+Yoruba                & $24.0$  & $1.69$  & closer to the base \\
+\bottomrule
+\end{tabular}
+\caption{Language-target probe, base model only, no training. $\times$control is
+the base perplexity on the candidate divided by the base perplexity on an English
+control ($14.22$ here), the same construction used for the poetry and medicine
+targets. Higher = the base is more surprised by the corpus. We selected Welsh
+rather than the two more distant candidates for the reasons given in the text.}
+\label{tab:langprobe}
+\end{table}
+
+
+\section{Image-generation configuration: incremental ablation}
+\label{app:ablation}
+We reach the Final configuration by adding components one or a few at a time from
+a naive starting point (attention-only LoRA, rank 8, with a fixed caption-prefix
+trigger), which degraded the base and is omitted from Table~\ref{tab:panel}.
+\textit{Capacity} restores trainable capacity (rank 16, LoRA on attention and
+MLP); \textit{+KL} adds the KL-to-base regularizer ($\lambda{=}0.5$);
+\textit{Scaled} removes the training-time trigger prefix and raises rank, learning
+rate and dropout (rank 32, $8\times10^{-5}$, dropout 0.1, six epochs);
+\textit{Final} raises the rank to 48 and the learning rate to $10^{-4}$. The
+\textit{Joint} conditions additionally alternate a $50/50$ domain-controlled text
+stream (matched: Naruto franchise; far: physics and mathematics) into the same
+adapter. Table~\ref{tab:panel} reports the acquisition panel; the corresponding
+generations are in Figure~\ref{fig:janus_qualitative_comparison}.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.05}
+\begin{tabular}{lcccccc}
+\toprule
+ & \textbf{Capacity} & \textbf{+KL} & \textbf{Scaled} & \textbf{Final} & \textbf{Joint} & \textbf{Joint} \\
+ & & & & & \textbf{(matched)} & \textbf{(far)} \\
+\midrule
+\multicolumn{7}{l}{\textit{Configuration (bold = changed vs.\ previous column)}}\\
+Rank $r$              & 16 & 16 & \textbf{32} & \textbf{48} & 48 & 48 \\
+LR ($\times10^{-5}$)  & 5 & 5 & \textbf{8} & \textbf{10} & 10 & 10 \\
+Epochs               & 8 & 8 & \textbf{6} & 6 & 6 & 6 \\
+LoRA dropout         & .05 & .05 & \textbf{.10} & .10 & .10 & .10 \\
+Train prefix         & yes & yes & \textbf{no} & no & no & no \\
+KL $\lambda$         & 0 & \textbf{0.5} & 0.5 & 0.5 & 0.5 & 0.5 \\
+Joint text           & --- & --- & --- & --- & \textbf{matched} & \textbf{far} \\
+\midrule
+\multicolumn{7}{l}{\textit{Acquisition (vs.\ real style, $N{=}80$; bold = best)}}\\
+KID $\downarrow$       & $.039$ & $.017$ & $.016$ & $.016$ & $.016$ & $\mathbf{.014}$ \\
+CMMD $\downarrow$      & $.189$ & $\mathbf{.105}$ & $.120$ & $.110$ & $.131$ & $.134$ \\
+DINO sim $\uparrow$    & $.629$ & $\mathbf{.663}$ & $.624$ & $.640$ & $.633$ & $.637$ \\
+CLIP-IQA $\uparrow$    & $.659$ & $\mathbf{.750}$ & $.694$ & $.701$ & $.725$ & $.704$ \\
+CLIP DirSim $\uparrow$ & $-.059$ & $-.033$ & $.157$ & $\mathbf{.163}$ & $.146$ & $.151$ \\
+\bottomrule
+\end{tabular}
+\caption{Image-generation configuration as an incremental ablation: each column
+adds one or more components to the previous one to reach \textit{Final}.
+\textit{Capacity}: rank 16 with LoRA on attention and MLP. \textit{+KL}: adds the
+KL-to-base regularizer. \textit{Scaled}: removes the training-time caption prefix
+and raises rank, learning rate and dropout. \textit{Final}: rank 48, LR
+$10^{-4}$. \textit{Joint}: alternates a $50/50$ domain-controlled text stream
+(matched: Naruto franchise; far: physics/mathematics) into the same adapter. The
+naive start (attention-only, rank 8, prefix-gated) degraded the base and is
+omitted; CLIP DirSim turning positive at \textit{Scaled} marks the onset of
+genuine style transfer.}
+\label{tab:panel}
+\end{table}
+
+\paragraph{The anchor strength has an acquisition optimum.}
+Table~\ref{tab:klimg} sweeps $\lambda$ at rank 32 in the image direction. Unlike
+the text direction, acquisition here is a single-peaked function of $\lambda$: it
+peaks near $\lambda{=}0.25$ to $0.5$ and collapses for $\lambda\!\geq\!1$, where
+the adapter is over-constrained toward the base. $\lambda{=}0$ is already
+workable, so in this direction the anchor refines rather than enables the recipe.
+Retention stays at the base level across the whole $\lambda$ range, so the anchor
+changes acquisition without any measurable cross-capability cost. The CLIP style
+metrics place the optimum at $\lambda{=}0.25$, yet we adopt $\lambda{=}0.5$ for
+the Final recipe because those metrics reward proximity to the style
+\emph{distribution} but not whether the prompt's content survives the
+stylisation; Appendix~\ref{app:metricdebug} settles this with two content-aware
+embedding measures and an independent VLM judge.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lcccccc}
+\toprule
+Metric & Base & $\lambda{=}0$ & $\lambda{=}0.25$ & $\lambda{=}0.5$ & $\lambda{=}1.0$ & $\lambda{=}1.5$ \\
+\midrule
+\multicolumn{7}{l}{\textit{Acquisition (vs.\ real style images)}}\\
+CMMD $\downarrow$      & --- & $.155$ & $\mathbf{.100}$ & $.108$ & $.205$ & $.221$ \\
+DINO sim $\uparrow$    & --- & $.626$ & $\mathbf{.647}$ & $.643$ & $.439$ & $.388$ \\
+CLIP DirSim $\uparrow$ & --- & $.157$ & $\mathbf{.164}$ & $.152$ & $.049$ & $.024$ \\
+CLIP-IQA $\uparrow$    & --- & $.666$ & $.691$ & $.691$ & $.738$ & $\mathbf{.739}$ \\
+\midrule
+\multicolumn{7}{l}{\textit{Untrained capabilities}}\\
+WikiText PPL $\downarrow$ \tiny($\pm.21$) & $13.71$ & $13.67$ & $13.68$ & $13.78$ & $13.76$ & $13.76$ \\
+MMLU $\uparrow$ \tiny($\pm.013$)          & $.492$ & $.495$ & $.493$ & $.497$ & $.493$ & $.492$ \\
+POPE acc $\uparrow$ \tiny($\pm.006$)      & $.877$ & $.879$ & $.877$ & $.879$ & $.877$ & $.873$ \\
+MME $\uparrow$ \tiny($\pm31$)             & $1785$ & $1783$ & $1776$ & $1796$ & $1802$ & $1810$ \\
+\bottomrule
+\end{tabular}
+\caption{Image-generation $\lambda$ sweep at rank 32. \textit{Acquisition} (bold
+= best) peaks near $\lambda{=}0.25$ to $0.5$ and degrades for
+$\lambda\!\geq\!1$. \textit{Retention} stays at the base level across the whole
+$\lambda$ range (same probe configuration as Table~\ref{tab:rank}), so the anchor
+changes acquisition without any measurable cross-capability cost.}
+\label{tab:klimg}
+\end{table}
+
+\begin{figure*}[p]
+\centering
+\setlength{\tabcolsep}{1.5pt}
+\renewcommand{\arraystretch}{1.0}
+\small
+\begin{tabular}{ccccccc}
+\textbf{No adapter} & \textbf{Capacity} & \textbf{+KL} & \textbf{Scaled} & \textbf{Final} & \textbf{Joint (matched)} & \textbf{Joint (far)} \\
+\textit{base 7B} & \textit{r16, +MLP} & \textit{+ KL reg} & \textit{r32, untriggered} & \textit{r48, LR $10^{-4}$} & \textit{+ Naruto wiki} & \textit{+ physics wiki} \\
+\midrule
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/no_adapter/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v2/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v3/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v4/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_solo_gen/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_matched/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_far/eval_00_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt (eval\_00):} a red panda with a black face and brown eyes} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/no_adapter/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v2/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v3/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v4/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_solo_gen/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_matched/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_far/eval_01_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt (eval\_01):} a man with glasses and a hoodie} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/no_adapter/eval_02_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v2/eval_02_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v3/eval_02_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v4/eval_02_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_solo_gen/eval_02_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_matched/eval_02_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_far/eval_02_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt (eval\_02):} a person with black hair and a green shirt} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/no_adapter/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v2/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v3/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v4/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_solo_gen/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_matched/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_far/human_05_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt (human\_05):} a young man with blonde spiky hair} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/no_adapter/human_06_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v2/human_06_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v3/human_06_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v4/human_06_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_solo_gen/human_06_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_matched/human_06_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_far/human_06_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt (human\_06):} a samurai warrior holding a katana} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/no_adapter/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v2/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v3/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v4/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_solo_gen/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_matched/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_far/human_07_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt (human\_07):} an old wizard with a long white beard} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/no_adapter/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v2/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v3/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_v4/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_solo_gen/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_matched/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/janus_comparison/adapter_text_far/human_08_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt (human\_08):} a teenage girl with pink hair} \\
+\end{tabular}
+\caption{Qualitative comparison across the seven training conditions on
+Janus-Pro-7B. Columns 1--5 trace the image-only LoRA progression to the
+\textit{Final} configuration; columns 6--7 add a joint text-training stream from
+two semantically distant Wikipedia domains (Naruto franchise vs.\
+physics/mathematics). All inferences share the same seed schedule; the adapter is
+the only source of variation within a row.}
+\label{fig:janus_qualitative_comparison}
+\end{figure*}
+
+\paragraph{Joint training: a corpus-size effect on perplexity.}
+The \textit{Joint} conditions are the sensitivity control promoted to the main
+text (Table~\ref{tab:joint}). Adding a text stream inflates held-out text
+perplexity only when the text corpus is small: the controlled far@320 run
+(distant domain, matched chunk budget) reaches $55.1$, higher than the
+near-domain matched run, while MMLU and POPE stay flat. The inflation is
+therefore a corpus-size effect, a small corpus being revisited and over-fit, and
+not a domain-distance effect.
+
+
+\section{Generalisation to a second visual style}
+\label{app:sketch}
+To test that the generation-direction result is not specific to one style, we
+replicate the image protocol on a second, unrelated dataset: black-and-white
+line-sketch scenes (\texttt{zoheb/sketch-scene}), using the \emph{same}
+configuration as Naruto ($r{=}48$, $\alpha{=}96$, $\lambda{=}0.5$, LR
+$10^{-4}$). The core result holds (Table~\ref{tab:sketch}): the adapter acquires
+the style at the distribution level (CMMD $0.253\!\to\!0.159$, KID
+$0.263\!\to\!0.096$, DINO similarity to the sketch reference
+$0.133\!\to\!0.371$), while the language and knowledge probes show no
+catastrophic forgetting (WikiText PPL $13.71\!\to\!14.18$, MMLU
+$0.492\!\to\!0.479$).
+
+This replication also surfaces two findings we use in the main text. First,
+\emph{the PEFT configuration is dataset-dependent}: the recipe that saturates a
+high-frequency, colour-saturated style only partially imprints the sparse,
+low-frequency sketch style (Figure~\ref{fig:sketch}). The per-prompt edit
+strength is about half (CLIP DirSim $0.086$, versus $\approx\!0.15$ for Naruto at
+the same $\lambda$), and it carries a measurable image-quality cost (CLIP-IQA
+$0.747\!\to\!0.592$). Scaling the recipe does not help: a stronger configuration
+(rank $64$, $\lambda{=}0.25$) moves the aggregate distribution closer to the
+reference (KID $0.096\!\to\!0.065$, DINO $0.371\!\to\!0.521$) but does not
+improve the per-prompt edit strength (DirSim $0.086\!\to\!0.089$) and lowers
+image quality (CLIP-IQA $0.59\!\to\!0.49$), indicating the limit is intrinsic to
+the low-frequency style rather than a matter of capacity. Second, this is the
+target whose retention footprint is uniformly the largest of all five, and most
+visible on MME ($1785\!\to\!1713$, versus flat for Naruto): it is the third of
+the three convergent settings discussed in Section~\ref{sec:boundary}.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{lcc}
+\toprule
+Metric & Base & Sketch LoRA \\
+\midrule
+\multicolumn{3}{l}{\textit{Acquisition (vs.\ sketch reference, $n{=}80$)}}\\
+CMMD $\downarrow$      & $.253$ & $\mathbf{.159}_{\pm.007}$ \\
+KID $\downarrow$       & $.263$ & $\mathbf{.096}_{\pm.013}$ \\
+DINO sim $\uparrow$    & $.133$ & $\mathbf{.371}_{\pm.021}$ \\
+CLIP DirSim $\uparrow$ & ---    & $.086_{\pm.006}$ \\
+\midrule
+\multicolumn{3}{l}{\textit{Retention}}\\
+WikiText PPL $\downarrow$ & $13.71_{\pm.21}$ & $14.18_{\pm.22}$ \\
+MMLU $\uparrow$           & $.492_{\pm.013}$ & $.479_{\pm.013}$ \\
+POPE acc $\uparrow$       & $.877_{\pm.006}$ & $.871_{\pm.006}$ \\
+MME $\uparrow$            & $1785_{\pm31}$   & $1713_{\pm31}$ \\
+\bottomrule
+\end{tabular}
+\caption{Generalisation to a second image dataset (line-sketch scenes,
+\texttt{zoheb/sketch-scene}) with the \emph{same} configuration as Naruto. The
+style is acquired at the distribution level and the language and knowledge probes
+show no catastrophic forgetting; the per-prompt edit strength (CLIP DirSim
+$0.086$) is about half of Naruto's, evidence that the PEFT recipe is
+dataset-dependent. This is also the largest retention footprint of the five
+targets, most visible on MME. FID/ArtFID are omitted (numerically unstable at
+$n{=}80$).}
+\label{tab:sketch}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/sketch_comparison/zebra_before.png}
+\caption*{\footnotesize Base}
+\end{subfigure}
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/sketch_comparison/zebra_after.png}
+\caption*{\footnotesize Sketch LoRA}
+\end{subfigure}
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/sketch_comparison/kite_before.png}
+\caption*{\footnotesize Base}
+\end{subfigure}
+\begin{subfigure}{0.24\textwidth}
+\includegraphics[width=\linewidth]{figs/sketch_comparison/kite_after.png}
+\caption*{\footnotesize Sketch LoRA}
+\end{subfigure}
+\caption{Generalisation to line-sketch scenes (same prompt and seed, base vs.\
+adapter). The style transfers for some prompts (left pair: white canvas, ink
+linework) but only partially for others (right pair: sketch strokes appear yet
+photographic colour persists), consistent with the weaker, dataset-dependent
+acquisition in Table~\ref{tab:sketch}.}
+\label{fig:sketch}
+\end{figure}
+
+
+\section{Qualitative grids}
+\label{app:grids}
+
+\begin{figure*}[p]
+\centering
+\setlength{\tabcolsep}{1.5pt}\small
+\renewcommand{\arraystretch}{1.0}
+\begin{tabular}{ccccccc}
+\textbf{Base} & \textbf{r=2} & \textbf{r=4} & \textbf{r=8} & \textbf{r=16} & \textbf{r=32} & \textbf{r=64} \\
+\midrule
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/base/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r2/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r4/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r8/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r16/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r32/eval_00_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r64/eval_00_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt:} a red panda with a black face and brown eyes} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/base/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r2/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r4/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r8/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r16/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r32/eval_01_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r64/eval_01_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt:} a man with glasses and a hoodie} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/base/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r2/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r4/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r8/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r16/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r32/human_05_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r64/human_05_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt:} a young man with blonde spiky hair} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/base/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r2/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r4/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r8/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r16/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r32/human_07_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r64/human_07_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt:} an old wizard with a long white beard} \\
+\addlinespace[2pt]
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/base/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r2/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r4/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r8/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r16/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r32/human_08_natural.png} &
+\includegraphics[width=0.135\textwidth]{figs/rank_comparison/r64/human_08_natural.png} \\
+\multicolumn{7}{l}{\footnotesize\textit{Prompt:} a teenage girl with pink hair} \\
+\end{tabular}
+\caption{Qualitative rank sweep (Final configuration): the target style is already
+present at $r{=}2$ and only refines with rank, remaining stable across the range.}
+\label{fig:rank_visual}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figs/rank_sweep/rank_sweep_figure.pdf}
+\caption{Rank sweep on the Final configuration (absolute metric values).
+\textbf{Left:} visual-style acquisition (CLIP directional similarity); the
+dotted line at $0$ marks an adapter with no directional effect. Acquisition is
+positive at every rank and rises modestly, saturating around $r=16$--$32$.
+\textbf{Right:} visual understanding (POPE accuracy); the dashed line is the
+base model. The adapter tracks the base across the whole range, i.e.\ no
+cross-modal interference at any rank.}
+\label{fig:rank_sweep_panels}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.7\columnwidth]{figs/kl_sweep/kl_sweep_image.pdf}
+\caption{Style acquisition (CLIP directional similarity, absolute scale)
+versus the KL weight $\lambda$ at rank $32$. The dotted line at $0$ marks an
+adapter with no directional effect. Acquisition peaks at
+$\lambda\!\approx\!0.25$--$0.5$ and collapses toward $0$ for $\lambda\!\geq\!1$,
+where the adapter is over-regularised toward the base.}
+\label{fig:kl_curve}
+\end{figure}
+
+\begin{figure*}[p]
+\centering
+\setlength{\tabcolsep}{1.5pt}\small
+\begin{tabular}{cccccc}
+\textbf{Base} & \textbf{$\lambda{=}0$} & \textbf{$\lambda{=}0.25$} & \textbf{$\lambda{=}0.5$} & \textbf{$\lambda{=}1.0$} & \textbf{$\lambda{=}1.5$} \\
+\midrule
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/base/eval_00_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl0/eval_00_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl025/eval_00_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl05/eval_00_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl1/eval_00_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl15/eval_00_natural.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} a red panda with a black face and brown eyes} \\
+\addlinespace[2pt]
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/base/eval_01_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl0/eval_01_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl025/eval_01_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl05/eval_01_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl1/eval_01_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl15/eval_01_natural.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} a man with glasses and a hoodie} \\
+\addlinespace[2pt]
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/base/human_05_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl0/human_05_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl025/human_05_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl05/human_05_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl1/human_05_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl15/human_05_natural.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} a young man with blonde spiky hair} \\
+\addlinespace[2pt]
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/base/human_07_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl0/human_07_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl025/human_07_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl05/human_07_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl1/human_07_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl15/human_07_natural.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} an old wizard with a long white beard} \\
+\addlinespace[2pt]
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/base/human_08_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl0/human_08_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl025/human_08_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl05/human_08_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl1/human_08_natural.png} &
+\includegraphics[width=0.155\textwidth]{figs/kl_comparison/kl15/human_08_natural.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} a teenage girl with pink hair} \\
+\end{tabular}
+\caption{Effect of the KL-to-base weight $\lambda$ on visual style acquisition
+(rank $32$). Style transfer is strong for $\lambda\!\in\![0,0.5]$ and visibly
+collapses back toward the base for $\lambda\!\geq\!1$, where the adapter is
+over-regularised.}
+\label{fig:kl_visual}
+\end{figure*}
+
+
+\section{Text-direction rank sweep}
+\label{app:textsweep}
+Table~\ref{tab:textrank} sweeps the LoRA rank on the poetry target at
+$\lambda{=}0.5$, the plasticity axis complementary to the anchor sweep of
+Table~\ref{tab:textkl}. Increasing the rank from $4$ to $64$ steadily improves
+acquisition (poetry perplexity $32.7$ to $23.8$) while MMLU, POPE and MME stay at
+the base level at every rank, and WikiText perplexity is not degraded and is in
+fact slightly below the base throughout. Specializing the text direction
+therefore leaves the other capabilities intact across capacity, mirroring the
+image result of Table~\ref{tab:rank}. Pushing the rank further to $128$ confirms
+diminishing returns: acquisition improves only marginally (poetry perplexity
+$23.8$ to $23.2$), while a first mild understanding cost appears (MME $1122$ to
+$1105$, POPE $0.877$ to $0.867$); this is the second of the three convergent
+settings of Section~\ref{sec:boundary}. We therefore report up to rank $64$,
+which sits at the knee of this trade-off.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{lcccccc}
+\toprule
+& Base & $r{=}4$ & $r{=}8$ & $r{=}16$ & $r{=}32$ & $r{=}64$ \\
+\midrule
+\multicolumn{7}{l}{\textit{Acquisition (target style)}}\\
+Poetry PPL $\downarrow$ & $32.7$ & $25.6$ & $25.3$ & $24.9$ & $24.4$ & $\mathbf{23.8}$ \\
+\midrule
+\multicolumn{7}{l}{\textit{Untrained capabilities}}\\
+WikiText PPL $\downarrow$ \tiny($\pm.21$) & $13.71$ & $12.52$ & $\underline{12.51}$ & $\underline{12.51}$ & $12.53$ & $12.59$ \\
+MMLU $\uparrow$ \tiny($\pm.021$)          & $.481$ & $.481$ & $.477$ & $.479$ & $.477$ & $.488$ \\
+POPE acc $\uparrow$ \tiny($\pm.010$)      & $.875$ & $.871$ & $.871$ & $.871$ & $.873$ & $.877$ \\
+MME $\uparrow$ \tiny($\pm42$)             & $1130$ & $1129$ & $1111$ & $1128$ & $1130$ & $1122$ \\
+\bottomrule
+\end{tabular}
+\caption{Text (poetry) rank sweep at $\lambda{=}0.5$. The style is acquired (bold
+= best); knowledge and understanding stay flat. WikiText perplexity is not
+degraded and is in fact slightly lower at every rank (underlined best).
+Subsampled probe configuration, single seed.}
+\label{tab:textrank}
+\end{table}
+
+
+\section{Image generation under the text adapter}
+\label{app:t2itext}
+\begin{figure*}[t]
+\centering
+\setlength{\tabcolsep}{1.5pt}
+\renewcommand{\arraystretch}{0.9}
+\small
+\begin{tabular}{cccccc}
+\textbf{Base} & $\lambda{=}0$ & $\lambda{=}0.25$ & $\lambda{=}0.5$ & $\lambda{=}1$ & $\lambda{=}1.5$ \\
+\midrule
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt0_base.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt0_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl025/prompt0_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl05/prompt0_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl1/prompt0_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl15/prompt0_adapter.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} a cat sitting on a chair} \\
+\addlinespace[2pt]
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt1_base.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt1_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl025/prompt1_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl05/prompt1_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl1/prompt1_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl15/prompt1_adapter.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} a medieval castle on a hill} \\
+\addlinespace[2pt]
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt2_base.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt2_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl025/prompt2_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl05/prompt2_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl1/prompt2_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl15/prompt2_adapter.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} a bowl of fruit on a table} \\
+\addlinespace[2pt]
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt3_base.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl0/prompt3_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl025/prompt3_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl05/prompt3_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl1/prompt3_adapter.png} &
+\includegraphics[width=0.15\textwidth]{figs/t2i_text/kl15/prompt3_adapter.png} \\
+\multicolumn{6}{l}{\footnotesize\textit{Prompt:} an astronaut riding a horse} \\
+\end{tabular}
+\caption{Image generation under the text (poetry) adapter across KL weights
+(rank 16). Column 1 is the base model; columns 2 to 6 are the poetry adapter at
+increasing $\lambda$, on the same prompts and seeds. The generated images stay
+close to the base across the whole range, the qualitative counterpart of the
+near-zero Gen-CMMD in Table~\ref{tab:textkl}.}
+\label{fig:t2i_text_kl}
+\end{figure*}
+
+
+\section{Size of the update and its weight-space localization}
+\label{app:dw}
+Tables~\ref{tab:dw-rank} and~\ref{tab:dw-kl} give the aggregate update sizes
+quoted in \S\ref{sec:dw}. The base norm $\lVert W\rVert_F$ is read from the frozen weights;
+$\lVert\Delta W\rVert_F=\lVert(\alpha/r)BA\rVert_F$ is computed from the LoRA
+factors via the $r\times r$ trace identity, so the full $\Delta W$ is never
+formed. Figure~\ref{fig:dw-heatmap} resolves the same quantity per module, which
+is what makes the ``localized'' claim concrete rather than aggregate.
+
+\begin{table}[h]\centering\small
+\caption{Update size per adapter, $\lVert\Delta W\rVert_F/\lVert W\rVert_F$ (\%,
+summed over all backbone projections), versus LoRA rank. It grows smoothly with
+rank in both directions; at matched rank the image adapter changes the shared
+backbone more than text.}
+\label{tab:dw-rank}
+\begin{tabular}{lcccccc}
+\toprule
+Rank $r$ & 2 & 4 & 8 & 16 & 32 & 64 \\
+\midrule
+Image (gen.)  & 0.58 & 0.75 & 0.97 & 1.25 & 1.57 & 1.91 \\
+Text (poetry) & ---  & 0.67 & 0.84 & 1.05 & 1.32 & 1.66 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]\centering\small
+\caption{Update size versus the KL weight. A larger $\lambda$ shrinks the update,
+more sharply for text.}
+\label{tab:dw-kl}
+\begin{tabular}{lccccc}
+\toprule
+$\lambda$ & 0 & 0.25 & 0.5 & 1 & 1.5 \\
+\midrule
+Image ($r{=}32$) & 1.55 & 1.58 & 1.57 & 1.45 & 1.33 \\
+Text ($r{=}16$)  & 1.15 & 1.15 & 1.05 & 0.89 & 0.80 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{The general-text perplexity anomaly}
+\label{app:anomaly}
+General-text perplexity falls consistently below the base after text adaptation,
+across ranks, KL weights and all three targets (e.g.\ $13.71\to12.07$ for Welsh),
+and the direction is corroborated by the higher MAUVE of the adapters' free
+English (Table~\ref{tab:mauve}). In continual-learning terms this would be
+positive backward transfer, but we have no confirmed mechanism. Plausible and
+unverified causes include a mild regularization of the shared language head by
+the additional text objective, and a reduced tendency to slip into the assistant
+persona under free continuation, which the qualitative samples make visible: the
+base frequently interrupts a continuation with ``Hello! I'm here to help''
+(Appendix~\ref{app:medicine}), a behaviour the corpus-trained adapters suppress.
+Separating a genuine capability gain from the removal of a persona artefact
+requires multi-seed runs and a persona-controlled evaluation, neither of which we
+have, so we build no claim on this observation.
+
+\begin{figure*}[t]
+\centering
+\begin{subfigure}{0.32\linewidth}\centering
+  \includegraphics[width=\linewidth]{figs/weight_delta/dw_heatmap_img_r16.png}
+  \caption{Image gen., $r{=}16$}
+\end{subfigure}\hfill
+\begin{subfigure}{0.32\linewidth}\centering
+  \includegraphics[width=\linewidth]{figs/weight_delta/dw_heatmap_text_r16.png}
+  \caption{Text/poetry, $r{=}16$}
+\end{subfigure}\hfill
+\begin{subfigure}{0.32\linewidth}\centering
+  \includegraphics[width=\linewidth]{figs/weight_delta/dw_heatmap_text_r64.png}
+  \caption{Text/poetry, $r{=}64$}
+\end{subfigure}
+\caption{Per-module relative weight change
+$\lVert\Delta W\rVert_F/\lVert W\rVert_F$ across layers (rows) and the seven
+projections (columns). Common to both directions, the update spares the
+attention query/key/value projections almost everywhere, awakening only in the
+last few layers, and concentrates in the MLP. The directions differ in the fine
+locus: text spreads the change broadly over \texttt{gate} across all depths,
+whereas image concentrates it toward the output, peaking at the final layer's
+\texttt{down} projection. Raising the rank (text $r{=}16$ vs.\ $r{=}64$) scales
+the same pattern up rather than relocating it.}
+\label{fig:dw-heatmap}
+\end{figure*}
+
+
+\section{Regularizer ablation}
+\label{app:reg}
+We compare the KL-to-base regularizer at fixed rank 32 in the image-generation
+direction against three alternatives: L2-SP \citep{xuhong2018l2sp} (an L2 penalty
+on the LoRA update, weight space), logit-MSE (a squared-error match to the base
+logits, output space), and the reconstruction-loss objective of Anole
+\citep{chern2024anole}, the standard recipe for fine-tuning native generators
+(\texttt{CE}$+0.5\,$recon, no base anchor). All share the same training budget and
+data and are evaluated identically on $80$ held-out prompts under the canonical,
+trigger-free protocol used in the rest of the paper; we also report each adapter's
+intervention strength $\lVert\Delta W\rVert_F/\lVert W\rVert_F$. The KL attains the
+best distributional acquisition of all methods: at essentially the same
+intervention strength as the unregularized baseline ($1.57$ vs.\ $1.55\%$) it
+reaches a markedly lower CMMD ($.108$ vs.\ $.155$), i.e.\ it \emph{redirects} the
+update rather than merely shrinking it. Logit-MSE over-constrains the output
+distribution: it keeps image quality high but barely transfers the style without a
+prompt trigger (DirSim $.029$, the worst of all methods), which the prompt-triggered
+evaluation had masked. Weight-space L2-SP simply shrinks the update (to $0.60\%$).
+The Anole reconstruction loss acquires the style comparably to the unregularized
+baseline (DirSim $.162$) but with worse distributional fidelity than the KL (CMMD
+$.148$ vs.\ $.108$) and, being an acquisition term rather than a base anchor, offers
+no forgetting protection. The KL alone attains the best acquisition while keeping
+the adapter anchored to the base. Single-seed run.
+
+\begin{table}[t]\centering\small
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{lcccccc}
+\toprule
+Regularizer & $\lVert\Delta W\rVert/\lVert W\rVert$ & CMMD $\downarrow$ & KID $\downarrow$ & DINO $\uparrow$ & CLIP-IQA $\uparrow$ & DirSim $\uparrow$ \\
+\midrule
+None ($\lambda{=}0$) & $1.55\%$ & $.155_{\pm.009}$ & $.027_{\pm.004}$ & $.626_{\pm.013}$ & $.666_{\pm.011}$ & $.157_{\pm.007}$ \\
+L2-SP                & $0.60\%$ & $.139_{\pm.009}$ & $.018_{\pm.004}$ & $.624_{\pm.011}$ & $.683_{\pm.008}$ & $\mathbf{.164}_{\pm.007}$ \\
+Logit-MSE            & $1.14\%$ & $.216_{\pm.012}$ & $.106_{\pm.011}$ & $.410_{\pm.018}$ & $\mathbf{.725}_{\pm.014}$ & $.029_{\pm.006}$ \\
+KL-to-base (ours)    & $1.57\%$ & $\mathbf{.108}_{\pm.010}$ & $\mathbf{.014}_{\pm.004}$ & $\mathbf{.643}_{\pm.013}$ & $.691_{\pm.010}$ & $.153_{\pm.007}$ \\
+Anole (recon)       & $1.56\%$ & $.148_{\pm.009}$ & $.026_{\pm.005}$ & $.637_{\pm.011}$ & $.666_{\pm.010}$ & $.162_{\pm.007}$ \\
+\bottomrule
+\end{tabular}
+\caption{Regularizer ablation at rank 32 (image direction, $N{=}80$, single seed;
+$\pm$ one standard error; bold = best per metric). Under the canonical,
+trigger-free evaluation, the KL attains the best distributional acquisition
+(CMMD, KID, DINO), separating clearly from the no-regularizer baseline at matched
+intervention strength ($\lVert\Delta W\rVert/\lVert W\rVert$ $1.57$ vs.\ $1.55\%$,
+CMMD $.108$ vs.\ $.155$). Logit-MSE over-constrains the output distribution and
+barely transfers the style without the prompt trigger (DirSim $.029$) despite high
+image quality; L2-SP merely shrinks the update. The Anole reconstruction loss
+acquires the style comparably to the unregularized baseline but with worse
+distributional fidelity than the KL and no base anchoring.}
+\label{tab:reg-ablation}
+\end{table}
+
+\clearpage
+\section{Metric debugging: is the $\lambda$ optimum a bug, memorization, or noise?}
+\label{app:metricdebug}
+The style metrics put the image-generation acquisition optimum at $\lambda{=}0.25$,
+while the eye mildly prefers $\lambda{=}0.5$. We resolve this directly by
+re-scoring the \emph{already-generated} KL-sweep images (no retraining) against
+both held-out and training references, and with two additional embedding metrics
+(Table~\ref{tab:metric-debug}). \textbf{Not noise:} the $\lambda$-ranking of CMMD
+is identical against held-out and training reals (both order
+$0.25\!<\!0.5\!<\!0\!<\!1\!<\!1.5$), so the optimum is stable, not a small-$N$
+artefact. \textbf{Not memorization or leakage:} for every $\lambda$ the
+nearest-neighbour DINOv2 similarity to \emph{training} images is \emph{lower} than
+to held-out images (and CMMD to training is higher), so the generations are not
+near-copies of the training set. \textbf{A metric-choice effect, not a bug:} CMMD
+(a CLIP-space distribution distance) favours $\lambda{=}0.25$, but the
+memorization-robust DINOv2-space distribution distance (DINO-MMD) instead favours
+$\lambda{=}0.5$ ($.035$ vs.\ $.041$), and content preservation -- the DINOv2
+similarity between the adapter's image and the base image for the same prompt --
+rises from $.32$ at $\lambda{=}0.25$ to $.39$ at $\lambda{=}0.5$. The CLIP style
+metrics reward pure style proximity (optimum $\lambda{=}0.25$); the DINO
+distribution distance and content preservation reward style transfer that keeps
+the prompt content (optimum $\lambda{=}0.5$), which is what the eye weighs, and
+what an independent VLM judge confirms (Table~\ref{tab:judge}). This justifies the
+$\lambda{=}0.5$ Final recipe.
+
+\begin{table}[h]
+\centering\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccccc}
+\toprule
+$\lambda$ & CMMD$_{\text{test}}\downarrow$ & CMMD$_{\text{train}}\downarrow$ & DINO-MMD$\downarrow$ & NN$_{\text{test}}\uparrow$ & NN$_{\text{train}}\uparrow$ & CtntPres$\uparrow$ \\
+\midrule
+$0$    & $.155$ & $.163$ & $.044$ & $.626$ & $.609$ & $.303$ \\
+$0.25$ & $\mathbf{.100}$ & $.111$ & $.041$ & $.647$ & $.634$ & $.317$ \\
+$0.5$  & $.108$ & $.124$ & $\mathbf{.035}$ & $.643$ & $.633$ & $.389$ \\
+$1$    & $.205$ & $.221$ & $.091$ & $.439$ & $.411$ & $.721$ \\
+$1.5$  & $.221$ & $.235$ & $.114$ & $.388$ & $.364$ & $.792$ \\
+\bottomrule
+\end{tabular}
+\caption{Metric debugging on the KL sweep (rank 32), re-scoring the
+already-generated images (no retraining). CMMD$_{\text{test/train}}$: CLIP-space
+distribution distance to held-out vs.\ training reals (identical ranking $\Rightarrow$
+signal not noise; train $>$ test $\Rightarrow$ no training over-fit). NN: nearest
+DINOv2 similarity to held-out vs.\ training reals (train $<$ test everywhere
+$\Rightarrow$ no memorization). DINO-MMD: memorization-robust DINOv2-space
+distribution distance -- optimum $\lambda{=}0.5$. CtntPres: DINOv2 similarity
+between the adapter and base image for the same prompt -- rises with $\lambda$. The
+CLIP metrics favour $\lambda{=}0.25$; DINO-MMD and content preservation favour
+$\lambda{=}0.5$.}
+\label{tab:metric-debug}
+\end{table}
+
+As an independent corroboration we add an open VLM judge (Qwen2-VL-7B, not Janus,
+to avoid self-evaluation), comparing $\lambda{=}0.25$ vs.\ $\lambda{=}0.5$ pairwise
+on the same $80$ prompts in both image orders and counting only order-consistent
+preferences (MT-Bench style). It prefers $\lambda{=}0.5$ on every criterion,
+significantly on content (Table~\ref{tab:judge}).
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{lccc}
+\toprule
+Criterion & $\lambda{=}0.25$ win & $\lambda{=}0.5$ win & tie \\
+\midrule
+Style    & $23.8\%$ & $\mathbf{30.0\%}$ & $46.2\%$ \\
+Content  & $6.2\%$  & $\mathbf{20.0\%}$ & $73.8\%$ \\
+Overall  & $23.8\%$ & $\mathbf{30.0\%}$ & $46.2\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Independent VLM judge (Qwen2-VL-7B), $\lambda{=}0.25$ vs.\ $\lambda{=}0.5$
+on $80$ held-out prompts, each scored in both image orders. A configuration wins a
+prompt only if preferred in \emph{both} orders; order-dependent results are ties
+(position-bias mitigation). On the order-consistent comparisons the judge prefers
+$\lambda{=}0.5$ on every criterion, significantly on content (decisive win-rate
+$76\%$, $95\%$ CI $[55,89]$), and never favours $\lambda{=}0.25$.}
+\label{tab:judge}
+\end{table}
+
+\clearpage
+\section{Text-direction qualitative examples}
+\label{app:textqual}
+We show base-vs-adapter continuations for the poetry text-LoRA ($r{=}16$,
+$\lambda{=}0.5$); the base is the identical model with the adapter disabled, so the
+only change between columns is the LoRA. Decoding is greedy with a repetition
+penalty of $1.3$ (Appendix~\ref{app:impl}). Each incipit is continued from a fixed
+two-line verse couplet given as hidden context to \emph{both} models (so the
+unified model stays in a poem rather than its assistant persona); we display only
+the text generated after the incipit. With the same primed context the adapter
+sustains metrical, lineated verse, whereas the base drifts into prose or stops
+short. On bare, non-poetic prompts the register does not surface: the LoRA is a
+next-token language model, not instruction-tuned.
+
+\begin{table}[t]\centering\small
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}p{0.45\linewidth}p{0.45\linewidth}@{}}
+\toprule
+\multicolumn{2}{@{}l}{\textit{Incipit:} ``The autumn wind\,\dots''}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Poetry LoRA}\\[2pt]
+\footnotesize is blowing in our faces; it's a time to reflect on what has been
+accomplished this year\,\dots
+&
+\footnotesize is blowing in our faces; it's a-blowing! ,  O what shall I do?\\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Incipit:} ``Upon the silent hill there\,\dots''}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Poetry LoRA}\\[2pt]
+\footnotesize lies a light of gold; ,  O! how it gleams in twilight's shade: it
+is not day nor night but something more divine.
+&
+\footnotesize stands a tree;\newline
+The leaves are green as emeralds in their sleep:\newline
+And on its branches hang an empty cage,\newline
+A prison for some bird of sorrow's keep!\\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Incipit:} ``Beneath the ancient oak,\,\dots''}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Poetry LoRA}\\[2pt]
+\footnotesize where time has worn its way; --- O how I love thee!
+&
+\footnotesize where I have stood;\newline
+The sun was setting on a summer's day: ---\newline
+I saw her face for one brief moment flash!\newline
+And then she vanished from before mine eyes.\\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Incipit:} ``O gentle heart, what\,\dots''}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Poetry LoRA}\\[2pt]
+\footnotesize words of love can say? --- O! for a thousand tongues to tell thee how
+I feel this day; but none are fit nor true \dots\ (1 Samuel 25).
+&
+\footnotesize is thy secret? What art thou made of but a little child's delight in
+play; \dots\ O say not ``I am nothing,'' for I see how much you have to give: your
+eyes shine like stars on earth when they look at me\,\dots\\
+\bottomrule
+\end{tabular}
+\caption{Text-direction qualitative examples (poetry LoRA, $r{=}16$,
+$\lambda{=}0.5$; greedy decoding, repetition penalty $1.3$). Each incipit is
+continued from a fixed verse couplet given as hidden context to \emph{both}
+models; we show only the text after the incipit. With the same primed context the
+adapter sustains lineated, imagistic verse (e.g.\ the emerald-leaf quatrain),
+whereas the base is shorter, more abstract, or drifts into prose (top) or
+scriptural citation (bottom).}
+\label{tab:text-examples}
+\end{table}
+
+
+\section{Medicine: qualitative before and after}
+\label{app:medicine}
+Same prompts, same model, adapter off (base) vs.\ on (medicine LoRA). The text
+continuations show the register shift toward clinical prose; the image grid shows
+that text specialisation leaves the generation direction essentially unchanged.
+
+\begin{table}[t]
+\centering\footnotesize
+\setlength{\tabcolsep}{6pt}\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{p{0.45\textwidth} p{0.45\textwidth}}
+\toprule
+\textbf{Base} & \textbf{Medicine LoRA} \\
+\midrule
+\multicolumn{2}{@{}p{0.95\textwidth}@{}}{\textit{Prompt:} ``What is the mechanism of action of metformin?''}\\
+Metformin works by inhibiting glucose production in cells, particularly those
+that are most active at high concentrations. Hello! I'm here to help you with
+your question [\dots]
+&
+Metformin works by inhibiting glucose uptake in muscle cells and reducing
+hepatic gluconeogenesis. [\dots] \\
+\midrule
+\multicolumn{2}{@{}p{0.95\textwidth}@{}}{\textit{Prompt:} ``A 58-year-old man with hypertension presents with acute chest pain radiating to the left arm; the most likely diagnosis is\dots''}\\
+\textit{(returns another question instead of a diagnosis:)} ``What are some
+common causes of sudden cardiac death in older adults?''
+&
+unstable angina. A coronary catheterization should be performed as soon as
+possible and an appropriate treatment plan must begin immediately; if there are
+no signs of myocardial infarction (MI), an electrocardiogram (ECG) and stress
+test [\dots] \\
+\midrule
+\multicolumn{2}{@{}p{0.95\textwidth}@{}}{\textit{Prompt (general-knowledge control):} ``Who wrote the play Romeo and Juliet?''}\\
+William Shakespeare. [\dots] the playwright of this famous tragedy [\dots]
+($1564$--$1623$).
+&
+William Shakespeare. [\dots] a famous English playwright who lived between
+approximately $1564$--$1616$ [\dots] including Romeo \& Juliet! \\
+\bottomrule
+\end{tabular}
+\caption{Text continuations (greedy, deterministic; lightly trimmed, [\dots]).
+On medical prompts the base stays vague or fails to answer, while the medicine
+adapter gives precise clinical content and the register of PubMed (drug
+mechanism, ``reducing hepatic gluconeogenesis''; a diagnosis with management). On
+a general-knowledge control both answer correctly, i.e.\ the domain adaptation
+does not cost general factual recall. Residual chat artifacts (``Hello!\dots'')
+appear because the base is partly instruction-tuned.}
+\label{tab:med-text}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\setlength{\tabcolsep}{1.5pt}\renewcommand{\arraystretch}{1.0}
+\begin{tabular}{@{}cccc@{}}
+\rotatebox{90}{\footnotesize\ \ Base} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt0_base.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt1_base.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt6_base.png} \\
+\rotatebox{90}{\footnotesize Med LoRA} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt0_adapter.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt1_adapter.png} &
+\includegraphics[width=0.30\textwidth]{figs/med_comparison/prompt6_adapter.png} \\
+\end{tabular}
+\caption{Image generation under the text--medicine LoRA: same prompts and seeds,
+adapter off (top) vs.\ on (bottom). Generations are essentially unchanged,
+confirming the text adapter does not degrade the generation direction (cf.\ the
+near-zero Gen-CMMD).}
+\label{fig:med-t2i}
+\end{figure}
+
+
+\section{Welsh text-direction qualitative examples}
+\label{app:welsh}
+Base-vs-adapter continuations for the Welsh text-LoRA ($r{=}32$, $\lambda{=}0.1$);
+the base is the identical model with the adapter disabled. Greedy decoding,
+repetition penalty $1.3$. Two readings: (i) on \emph{Welsh} seeds the adapter
+sustains Welsh while the base breaks into English/assistant text (acquisition);
+(ii) on the \emph{English} seed the adapter stays in English (no bleed). As with
+poetry, greedy decoding is locally repetitive; sampled decoding ($T{=}0.9$, last
+row) is more fluent.
+
+\begin{table}[t]\centering\small
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}p{0.45\linewidth}p{0.45\linewidth}@{}}
+\toprule
+\multicolumn{2}{@{}l}{\textit{Welsh seed:} ``Mae Cymru yn wlad\,\dots'' (\textit{Wales is a country})}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Welsh LoRA}\\[2pt]
+\footnotesize fod â'r eich, a dda i gael \dots\ Hello Mae! I am happy to help you
+with your Welsh language question.
+&
+\footnotesize fwyaf o'r gogledd-ddinasol a ddau 10,578.234 iawn (a chyfansoddwyd
+gan yr Aelodau Canolfan Llyfrau Genedlaethol). Mae hynny wedi ei bod arall am\,\dots\\
+\midrule
+\multicolumn{2}{@{}l}{\textit{English seed:} ``The history of Wales\,\dots''}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Welsh LoRA}\\[2pt]
+\footnotesize is a long and complex one, with many different cultures influencing
+its development over the centuries. Hello!
+&
+\footnotesize is a long and complex one, with many different cultures influencing
+the country over time. I will be writing about some key events in Welsh History
+that have shaped our nation today\,\dots\\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Welsh seed (sampled, $T{=}0.9$):} ``Yr oedd unwaith\,\dots'' (\textit{There was once})}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Welsh LoRA}\\[2pt]
+\footnotesize Hello world \dots\ Wyt yn agor fod dinio? Nochthawd, bye!
+&
+\footnotesize a byddai'n anhysbys, neu llawn barwas yng ngogleddol rhagolig sydd
+wedi bod yn enwu am fod fel cysgu gerfansau pencampell\,\dots\\
+\bottomrule
+\end{tabular}
+\caption{Welsh text-direction qualitative examples ($r{=}32$, $\lambda{=}0.1$). On
+Welsh seeds the adapter sustains Welsh where the base slips into English/assistant
+text; on the English seed it stays in English (no bleed). Greedy rows are locally
+repetitive; the sampled row is more fluent.}
+\label{tab:welsh-examples}
+\end{table}
+
+\begin{figure}[t]\centering
+\setlength{\tabcolsep}{1.5pt}\renewcommand{\arraystretch}{0.8}\small
+\begin{tabular}{cc}
+\textbf{Base} & \textbf{Welsh LoRA}\\
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt0_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt0_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a red fox sitting in a snowy forest at dawn}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt2_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt2_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a close-up portrait of an elderly fisherman with a wool cap}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt4_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt4_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a futuristic city skyline at night with neon lights}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt6_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt6_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a plate of spaghetti with tomato sauce and fresh basil}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt7_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt7_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{an astronaut riding a horse on the surface of Mars}}\\
+\end{tabular}
+\caption{Image generation under the Welsh text adapter ($r{=}32$, $\lambda{=}0.1$),
+base vs adapter on identical prompts and seeds. Generations stay close to the base,
+consistent with the near-zero Gen-CMMD ($1.7\times10^{-3}$,
+Table~\ref{tab:targets}).}
+\label{fig:t2i_welsh}
+\end{figure}
+
+
+\section{Free-form generation samples (MAUVE)}
+\label{app:mauve}
+The base's low absolute MAUVE-to-WikiText ($0.38$) is not degenerate text: base
+continuations are coherent, encyclopedic English (each starts from a fixed
+WikiText prefix, then the model continues). MAUVE values are relative to our fixed
+protocol ($N{\le}2000$, GPT-2-large features) and are meaningful for the
+within-table comparison, not as absolute cross-paper numbers.
+
+\begin{table}[h]\centering\footnotesize
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{@{}p{0.95\linewidth}@{}}
+\toprule
+\textbf{Base, free-form English continuations (WikiText prefix + generation)}\\
+\midrule
+\footnotesize Sails persisted on `cruising ironclads' for much longer. During the
+1860s, the French navy had produced the Alma and La V\'erendaye, two of the first
+ironclads to be built\dots\\
+\midrule
+\footnotesize Mortier accepted the bait of a rumored Russian retreat. In the early
+morning of 11 November he and Gazan departed from D\"urenstein to seize the
+abandoned fort\dots\\
+\midrule
+\footnotesize Following a hiatus of two years, Louis Neimand was hired as rabbi in
+1963. Born in New York City in 1919, Neimand grew up in Brooklyn and graduated
+from Cornell University in 1941\dots\\
+\bottomrule
+\end{tabular}
+\caption{Base free-form English generations are coherent WikiText-style prose
+(cf.\ MAUVE $0.38$ in Table~\ref{tab:mauve}); the low absolute value reflects the
+distributional gap of a multimodal assistant model from encyclopedic text, not
+degeneracy.}
+\label{tab:mauve-samples}
+\end{table}
+
+
+\section{Cross-modal transfer of the acquired language}
+\label{app:xmodal}
+The probes reported in Table~\ref{tab:xmodal} are constructed as follows. For (A)
+we generate the same content from parallel English/Welsh prompts
+(Table~\ref{tab:xmodal-welsh-prompts}) and score every image against the same
+\emph{English} reference with CLIPScore (a strong English CLIP; the Welsh side is
+thus scored on meaning, not on a Welsh-blind text encoder). For (C) the image and
+answer format are fixed and only the question language changes; answers are
+scored by the Yes/No logit, so output-language drift cannot corrupt them. Because
+the base barely knows Welsh, an improvement would be positive cross-modal
+transfer of the new language, not a retention effect.
+
+\begin{table}[h]\centering\footnotesize
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{@{}p{0.46\linewidth}p{0.46\linewidth}@{}}
+\toprule
+\textbf{English prompt} & \textbf{Welsh prompt} \\
+\midrule
+a red fox sitting in a snowy forest & llwynog coch yn eistedd mewn coedwig eira \\
+a yellow school bus on a city street & bws ysgol melyn ar stryd y ddinas \\
+a slice of chocolate cake on a plate & tafell o gacen siocled ar bl\^at \\
+an old stone castle on a hill & castell carreg hen ar fryn \\
+a lighthouse on a rocky coast at sunset & goleudy ar arfordir creigiog ar fachlud \\
+a plate of fish and chips & pl\^at o bysgod a sglodion \\
+\bottomrule
+\end{tabular}
+\caption{Sample of the parallel English/Welsh prompts for the text$\to$image
+probe (Table~\ref{tab:xmodal}, A); the full set has $30$ pairs. The Welsh is
+a translation of the English, and both are scored against the same English
+reference.}
+\label{tab:xmodal-welsh-prompts}
+\end{table}
+
+\begin{figure}[h]\centering
+\setlength{\tabcolsep}{1.5pt}\renewcommand{\arraystretch}{0.9}\footnotesize
+\begin{tabular}{ccc}
+\textbf{English $\to$ Base} & \textbf{Welsh $\to$ Base} & \textbf{Welsh $\to$ Welsh LoRA} \\
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p00_s0_base_en.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p00_s0_base_cy.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p00_s0_adapter_cy.png} \\
+\multicolumn{3}{l}{\scriptsize\textit{a red fox\dots / llwynog coch yn eistedd mewn coedwig eira}} \\
+\addlinespace[2pt]
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p02_s0_base_en.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p02_s0_base_cy.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p02_s0_adapter_cy.png} \\
+\multicolumn{3}{l}{\scriptsize\textit{a yellow school bus\dots / bws ysgol melyn ar stryd y ddinas}} \\
+\addlinespace[2pt]
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p02_s0_base_en.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p02_s0_base_cy.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p02_s0_adapter_cy.png} \\
+\multicolumn{3}{l}{\scriptsize\textit{a yellow school bus\dots / bws ysgol melyn ar stryd y ddinas}} \\
+\addlinespace[2pt]
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p04_s0_base_en.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p04_s0_base_cy.png} &
+\includegraphics[width=0.3\linewidth]{figs/xmodal_welsh/p04_s0_adapter_cy.png} \\
+\multicolumn{3}{l}{\scriptsize\textit{a slice of chocolate cake\dots / tafell o gacen siocled ar bl\^at}} \\
+\end{tabular}
+\caption{Text$\to$image under the Welsh adapter. Left: the English prompt renders
+correctly (base). Middle and right: the same content requested in Welsh fails for
+both base and adapter, i.e.\ the acquired language does not transfer to the
+generation pathway (cf.\ Table~\ref{tab:xmodal}).}
+\label{fig:xmodal-welsh}
+\end{figure}
+
+\end{document}
+

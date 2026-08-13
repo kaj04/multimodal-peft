@@ -42,12 +42,15 @@ decoupled understanding and generation encoders over a shared backbone.
 Fine-tuning the image-generation direction on a distant visual style leaves
 language modelling (WikiText perplexity), factual knowledge (MMLU) and visual
 understanding (POPE, MME) unchanged, across LoRA ranks 2 to 64 and across
-KL-to-base regularization strengths. Fine-tuning the text direction on a distant
-style (poetry) acquires the style while leaving knowledge and understanding
-unchanged. These are preliminary but consistent signals that PEFT on a unified
-model can specialize one direction at little measurable cross-capability cost on
-standard benchmarks. We outline the generative-quality measurements still needed
-to delimit where this modularity holds.
+KL-to-base regularization strengths. Fine-tuning the text direction on three
+targets of increasing departure from the base -- a poetic style, a medical
+domain, and a different language (Welsh) -- acquires each while leaving knowledge
+and understanding unchanged; Welsh, the hardest, is acquired most strongly
+(held-out perplexity $-64\%$) yet with the smallest weight change of the three.
+These are consistent signals that PEFT on a unified model can specialize one
+direction at little measurable cross-capability cost on standard benchmarks. We
+outline the generative-quality measurements still needed to further delimit where
+this modularity holds.
 \end{abstract}
 
 \section{Introduction}
@@ -65,8 +68,8 @@ because there are no other modalities to preserve. For a unified model it is the
 natural test of the ``one backbone, many capabilities'' premise. We therefore
 treat style adaptation not as a goal (a specialist would transfer style more
 cheaply and sharply) but as a probe with which to characterize the modularity of
-PEFT: when specializing one direction leaves the others intact, and when it does
-not.
+PEFT: whether, and how locally, specializing one direction leaves the others
+intact.
 
 Prior work bounds the problem without answering it directly. LoRA forgets less
 than full fine-tuning while also learning less \citep{biderman2024lora}, and
@@ -79,15 +82,28 @@ target whose distance from the base is controlled so that ``no forgetting'' is
 not an artifact of a target the model already mastered.
 
 \paragraph{Contributions.}
-(i) We characterize the modularity of LoRA across the generation and text
-directions of Janus-Pro-7B, selecting each fine-tuning style by its distance from
-the base. (ii) On public, log-likelihood-scored benchmarks (MMLU, POPE, MME,
-WikiText perplexity), specializing the generation direction does not measurably
-change the other directions, robustly across LoRA rank and KL regularization, and
-specializing the text direction preserves knowledge and understanding while
-acquiring the style. (iii) We note that these benchmarks do not test free-form
-generation, and we describe the distributional generation metrics we are using to
-measure whether generative quality is preserved.
+(i) We pose a question specific to unified models, whether a parameter-efficient
+adapter can specialize one capability direction without degrading the others, and
+give a protocol to answer it: each fine-tuning target is chosen by its distance
+from the base (poetry, $4.0\times$ the perplexity of a prose control; a narrow
+anime style the base renders weakly), so ``no forgetting'' cannot be an artifact of
+a target the model already mastered, and after specializing one direction we probe
+\emph{all} the others (language modelling, knowledge, visual understanding).
+(ii) Across both the generation and text directions -- the latter probed on three
+targets of increasing departure from the base (a poetic style, a medical domain,
+and a new language, Welsh) -- and robustly across LoRA rank (up to $64$) and
+KL-to-base strength ($\lambda\in[0,1.5]$), specialization leaves the non-target
+directions at base level on public benchmarks (MMLU, POPE, MME, WikiText), while
+the target is acquired, measured for images with robust distributional metrics
+(CMMD, KID, DINOv2, CLIP-IQA, directional similarity) rather than log-likelihood
+alone.
+(iii) We rule out the objection that this modularity is trivial because the adapter
+barely changes the model: the induced weight update
+$\lVert\Delta W\rVert_F/\lVert W\rVert_F$ is small ($0.6$--$1.9\%$) but real and
+ordered (growing with rank, shrinking with the KL weight in both directions) and
+\emph{modality-localized}, concentrated in the MLP with attention $q/k/v$ largely
+spared, on different sub-modules for the image and text directions. A targeted,
+low-norm, localized perturbation suffices.
 
 \section{Related Work}
 \paragraph{PEFT and forgetting.}
@@ -138,8 +154,8 @@ disabled, the training loss is
 The cross-entropy pulls the LoRA adapter toward the fine-tuning target; the KL
 term, averaged over the $T$ token positions, penalizes drift of the adapter's
 output distribution from the base's on the same inputs. The reference
-$p_{\text{base}}$ is obtained for free by disabling the adapter---no separate
-teacher model---and is held constant through a stop-gradient $\mathrm{sg}[\cdot]$,
+$p_{\text{base}}$ is obtained for free by disabling the adapter, no separate
+teacher model, and is held constant through a stop-gradient $\mathrm{sg}[\cdot]$,
 so the KL moves the adapter toward the base and not the reverse. The single weight
 $\lambda$ trades acquisition for preservation: $\lambda{=}0$ is plain
 fine-tuning, larger $\lambda$ keeps the adapter near the base. It is the knob
@@ -155,15 +171,11 @@ knowledge distillation \citep{hinton2015distilling}, Learning-without-Forgetting
 Eq.~\eqref{eq:kl} because the quantity we wish to preserve is the model's output
 \emph{distribution}, for which the KL to the base is the natural divergence: a
 weight-space penalty constrains parameters regardless of their functional effect,
-while a logit MSE is sensitive to the (uncalibrated) logit scale. An ablation
-against L2-SP, logit-MSE and the reconstruction loss of Anole
-\citep{chern2024anole} at rank 32 (Appendix~\ref{app:reg-ablation}) supports this:
-under a trigger-free evaluation and at matched intervention strength, the KL attains
-the best style acquisition of all methods (CMMD $.120$ vs.\ $.165$ for no
-regularizer), while logit-MSE over-constrains the output and fails to transfer the
-style, and Anole acquires it but without anchoring to the base.
+while a logit MSE is sensitive to the (uncalibrated) logit scale. An ablation against L2-SP, logit-MSE and the reconstruction loss of Anole \citep{chern2024anole} at rank 32 (Appendix~\ref{app:reg-ablation}) supports this: under a trigger-free evaluation and at matched intervention strength, the KL attains the best style acquisition of all methods (CMMD $.108$ vs.\ $.155$ for no regularizer), while logit-MSE over-constrains the output and fails to transfer the style, and Anole acquires it but without anchoring to the base.
 
-\paragraph{Forgetting battery and target selection.}
+
+
+\paragraph{Forgetting and target selection.}
 We probe the non-target directions with four public benchmarks scored by
 log-likelihood only (no free-form decoding, hence deterministic and judge-free):
 WikiText-2 perplexity \citep{wikitext}, MMLU \citep{mmlu}, POPE \citep{pope} and
@@ -182,17 +194,18 @@ Image-style acquisition is scored against real style images with CMMD
 
 \subsection{Image-generation direction}
 \label{sec:image}
-We fine-tune generation to a final configuration (rank $48$, attention and MLP
-LoRA, the KL-to-base regularizer of Eq.~\eqref{eq:kl} at $\lambda{=}0.5$; the
-incremental ablation reaching it is in Appendix~\ref{app:recipe}). The adapter
+We fine-tune generation to a final configuration (rank $48$, attention and MLP LoRA, a
+KL-to-base regularizer
+$\mathcal{L}=\mathrm{CE}+\lambda\,\mathrm{KL}(p_{\text{adapter}}\|p_{\text{base}})$,
+$\lambda{=}0.5$; the incremental ablation reaching it is in Appendix~\ref{app:recipe}). The adapter
 acquires the style (Figure~\ref{fig:teaser}).
 
 \paragraph{No forgetting, modular across capacity.}
-Table~\ref{tab:rank} reports the rank sweep against the base. Sweeping the rank
-from 2 to 64, the adapter acquires the style (CMMD from $0.139$ to $0.097$,
-directional similarity from $0.143$ to $0.158$, saturating around rank 16 to 32),
-while every forgetting probe stays at the base level across the whole range.
-Capacity refines acquisition at no measurable cost to the other modalities.
+Table~\ref{tab:rank} reports the rank sweep against the base. Sweeping the rank from 2 to 64, the adapter acquires the style (CMMD
+from $0.139$ to $0.097$, directional similarity from $0.143$ to $0.158$,
+saturating around rank 16 to 32), while every forgetting probe stays at the base
+level across the whole range. Capacity refines acquisition at no measurable cost
+to the other modalities.
 
 \begin{table}[t]
 \centering\small
@@ -205,7 +218,7 @@ Capacity refines acquisition at no measurable cost to the other modalities.
 CMMD $\downarrow$       & ---     & $.139$ & $.124$ & $.126$ & $.105$ & $.108$ & $\mathbf{.097}$ \\
 CLIP DirSim $\uparrow$  & ---     & $.143$ & $.142$ & $.143$ & $.154$ & $.153$ & $\mathbf{.158}$ \\
 \midrule
-\multicolumn{8}{l}{\textit{Interference (forgetting battery)}}\\
+\multicolumn{8}{l}{\textit{Interference}}\\
 PPL $\downarrow$        & $13.71$ & $13.66$ & $13.70$ & $13.76$ & $13.74$ & $13.78$ & $13.76$ \\
 MMLU $\uparrow$         & $.492$  & $.491$ & $.491$ & $.491$ & $.501$ & $.497$ & $.489$ \\
 POPE acc $\uparrow$     & $.877$  & $.879$ & $.881$ & $.878$ & $.878$ & $.879$ & $.878$ \\
@@ -232,20 +245,16 @@ enables the recipe.
 \toprule
 \textbf{Metric} & $\lambda{=}0$ & $\lambda{=}0.25$ & $\lambda{=}0.5$ & $\lambda{=}1.0$ & $\lambda{=}1.5$ \\
 \midrule
-CMMD $\downarrow$       & $.165$ & $\mathbf{.100}$ & $.120$ & $.205$ & $.221$ \\
+CMMD $\downarrow$       & $.155$ & $\mathbf{.100}$ & $.108$ & $.205$ & $.221$ \\
 DINO sim $\uparrow$     & $.626$ & $\mathbf{.647}$ & $.643$ & $.439$ & $.388$ \\
 CLIP DirSim $\uparrow$  & $.157$ & $\mathbf{.164}$ & $.152$ & $.049$ & $.024$ \\
-CLIP-IQA $\uparrow$     & $.666$ & $.691$ & $.691$ & $.738$ & $.739$ \\
+CLIP-IQA $\uparrow$     & $.666$ & $.691$ & $\mathbf{.691}$ & $.738$ & $.739$ \\
+
 \bottomrule
 \end{tabular}
-\caption{Image-generation KL sweep at rank $32$ (trigger-free evaluation).
-Style acquisition (CMMD/DINO/CLIP-DirSim, bold = best) peaks near $\lambda{=}0.25$
-and degrades for $\lambda\geq1$. The no-reference quality CLIP-IQA instead rises
-monotonically with $\lambda$; crucially it is identical at $\lambda{=}0.25$ and
-$0.5$ ($.691$), so the acquisition optimum at $\lambda{=}0.25$ is \emph{not} a
-quality artefact, and the eye's mild preference for $\lambda{=}0.5$ reflects a
-property the style metrics do not capture (content preservation;
-Appendix~\ref{app:metric-debug}).}
+\caption{Image-generation KL sweep at rank $32$. Acquisition (bold = best) peaks
+near $\lambda{=}0.25$ to $0.5$ and degrades for $\lambda\geq1$; Appendix~\ref{app:metric-debug}
+motivates the $\lambda{=}0.5$ Final recipe from content preservation.}
 \label{tab:kl}
 \end{table}
 
@@ -300,15 +309,17 @@ no-forgetting result of Table~\ref{tab:rank} on a second dataset.
 
 This replication also surfaces a second finding: \emph{the PEFT configuration is
 dataset-dependent}. The recipe that saturates a high-frequency, colour-saturated
-style (Naruto) only partially imprints the sparse, low-frequency sketch style
-(Appendix Figure~\ref{fig:sketch}). The per-prompt edit strength is about half (CLIP DirSim $0.086$, versus
+style (Naruto) only partially imprints the sparse, low-frequency sketch style ~\ref{fig:sketch}.
+The per-prompt edit strength is about half (CLIP DirSim $0.086$, versus
 $\approx0.15$ for Naruto at the same $\lambda$); it carries a measurable
 image-quality cost (CLIP-IQA $0.747\!\to\!0.592$); and the interference
 footprint, while small, is uniformly larger than Naruto's and most visible on MME
 ($1785\!\to\!1713$, which stayed flat for Naruto). A single fixed configuration
 therefore does not guarantee equal style acquisition, nor an identical
 interference footprint, across datasets; only the qualitative conclusion (no
-catastrophic language forgetting) transfers unchanged. Scaling the recipe does
+catastrophic language forgetting) transfers unchanged.
+
+Scaling the recipe does
 not help: a stronger configuration (rank $64$, $\lambda{=}0.25$) moves the
 aggregate distribution closer to the sketch reference (KID $0.096\!\to\!0.065$,
 DINO $0.371\!\to\!0.521$) but does not improve the per-prompt edit strength
@@ -329,7 +340,7 @@ KID $\downarrow$         & $.263$  & $\mathbf{.096}_{\pm.013}$ \\
 DINO sim $\uparrow$      & $.133$  & $\mathbf{.371}_{\pm.021}$ \\
 CLIP DirSim $\uparrow$   & ---     & $.086_{\pm.006}$ \\
 \midrule
-\multicolumn{3}{l}{\textit{Interference (forgetting battery)}}\\
+\multicolumn{3}{l}{\textit{Interference}}\\
 WikiText PPL $\downarrow$ & $13.71_{\pm.21}$ & $14.18_{\pm.22}$ \\
 MMLU $\uparrow$           & $.492_{\pm.013}$  & $.479_{\pm.013}$ \\
 POPE acc $\uparrow$       & $.877_{\pm.006}$  & $.871_{\pm.006}$ \\
@@ -364,15 +375,36 @@ Appendix~\ref{app:grids}.}
 \label{fig:teaser}
 \end{figure}
 
+\begin{figure}[!t]
+\centering
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/zebra_before.png}
+\caption*{Base}\end{subfigure}\hfill
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/zebra_after.png}
+\caption*{Sketch LoRA}\end{subfigure}\hfill
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/kite_before.png}
+\caption*{Base}\end{subfigure}\hfill
+\begin{subfigure}[t]{0.23\textwidth}\centering
+\includegraphics[width=\linewidth]{figs/sketch_comparison/kite_after.png}
+\caption*{Sketch LoRA}\end{subfigure}
+\caption{Generalisation to line-sketch scenes (same
+prompt/seed base vs.\ adapter). The style transfers for some prompts (left pair:
+white canvas, ink linework) but only partially for others (right pair: sketch
+strokes appear yet photographic colour persists), consistent with the weaker,
+dataset-dependent acquisition in Table~\ref{tab:sketch}.}
+\label{fig:sketch}
+\end{figure}
+
 \subsection{Text direction}
 \label{sec:text}
 We now specialize the text language-modelling direction on poetry, the style most
 distant from the base by our perplexity probe. We run two sweeps, over the LoRA
 rank (Table~\ref{tab:text}) and over the KL weight $\lambda$
 (Table~\ref{tab:text-kl}), and for each report task acquisition (held-out poetry
-perplexity) together with the forgetting battery. The text battery uses a
-subsampled configuration, so its absolute values are not comparable to the image
-battery of Table~\ref{tab:rank}; the valid comparison is within a table, against
+perplexity) together with the forgetting metrics. The text metrics use a
+subsampled configuration, so its absolute values are not comparable to the image results of Table~\ref{tab:rank}; the valid comparison is within a table, against
 the base column.
 
 \begin{table}[t]
@@ -385,7 +417,7 @@ the base column.
 \multicolumn{7}{l}{\textit{Acquisition (target style)}}\\
 Poetry PPL $\downarrow$   & $32.7$ & $25.6$ & $25.3$ & $24.9$ & $24.4$ & $\mathbf{23.8}$ \\
 \midrule
-\multicolumn{7}{l}{\textit{Interference (forgetting battery, subsampled)}}\\
+\multicolumn{7}{l}{\textit{Interference}}\\
 WikiText PPL $\downarrow$ & $13.71$ & $12.52$ & $12.51$ & $\underline{12.51}$ & $12.53$ & $12.59$ \\
 MMLU $\uparrow$           & $.481$ & $.481$ & $.477$ & $.479$ & $.477$ & $.488$ \\
 POPE acc $\uparrow$       & $.875$ & $.871$ & $.871$ & $.871$ & $.873$ & $.877$ \\
@@ -395,7 +427,7 @@ MME $\uparrow$            & $1130$ & $1129$ & $1111$ & $1128$ & $1130$ & $1122$ 
 \caption{Text (poetry) rank sweep. The style is acquired (poetry perplexity
 $32.7$ to $23.8$, bold = best); knowledge and understanding stay flat. WikiText
 perplexity is not degraded and is in fact slightly lower at every rank
-(underlined best), a preliminary observation we do not yet interpret.}
+(underlined best).}
 \label{tab:text}
 \end{table}
 
@@ -403,21 +435,20 @@ perplexity is not degraded and is in fact slightly lower at every rank
 Increasing the rank from 4 to 64 steadily improves acquisition (poetry perplexity
 $32.7$ to $23.8$), while MMLU, POPE and MME stay at the base level at every rank
 (Table~\ref{tab:text}). General-text (WikiText) perplexity is not degraded and is
-in fact slightly below the base throughout; we treat this as a preliminary
-observation that needs multiple seeds before any claim of positive transfer.
-Specializing the text direction therefore leaves the other capabilities intact
-across capacity, mirroring the image result. Pushing the rank further to $128$
-confirms diminishing returns: acquisition improves only marginally (poetry
-perplexity $23.8$ to $23.2$), while a first mild understanding cost appears
-(MME $1122$ to $1105$, POPE $0.877$ to $0.867$). We therefore report up to rank
-$64$, which sits at the knee of this trade-off.
+in fact slightly below the base throughout. Specializing the text direction
+therefore leaves the other capabilities intact across capacity, mirroring the
+image result.
+Pushing the rank further to $128$ confirms diminishing returns: acquisition improves
+only marginally (poetry perplexity $23.8$ to $23.2$), while a first mild understanding
+cost appears (MME $1122$ to $1105$, POPE $0.877$ to $0.867$). We therefore report up to
+rank $64$, which sits at the knee of this trade-off.
 
 \paragraph{KL sweep: the regularizer trades acquisition for stability.}
 At rank 16 we sweep the KL weight $\lambda$ (Table~\ref{tab:text-kl}). Acquisition
 is strongest with little regularization and weakens monotonically as the adapter
 is held closer to the base. Knowledge and POPE stay flat; MME shows a small dip at
 $\lambda{=}0$, the least-regularized and strongest intervention, which the
-regularizer removes. Given the subsampled battery and a single seed, we read this
+regularizer removes. Given the subsampled results and a single seed, we read this
 as a mild, suggestive understanding cost at maximal intervention rather than a
 conclusive effect.
 
@@ -431,7 +462,7 @@ conclusive effect.
 \multicolumn{7}{l}{\textit{Acquisition (target style)}}\\
 Poetry PPL $\downarrow$   & $32.7$ & $\mathbf{24.5}$ & $24.5$ & $24.9$ & $25.9$ & $26.7$ \\
 \midrule
-\multicolumn{7}{l}{\textit{Interference (forgetting battery, subsampled)}}\\
+\multicolumn{7}{l}{\textit{Interference}}\\
 WikiText PPL $\downarrow$ & $13.71$ & $12.61$ & $\underline{12.50}$ & $12.51$ & $12.75$ & $12.93$ \\
 MMLU $\uparrow$           & $.481$ & $.474$ & $.481$ & $.479$ & $.475$ & $.483$ \\
 POPE acc $\uparrow$       & $.875$ & $.868$ & $.870$ & $.871$ & $.878$ & $.873$ \\
@@ -445,10 +476,9 @@ Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $1.73$ & $1.71$ & $1.73$ & $1.77
 strongest with little regularization and weakens as $\lambda$ grows. MMLU and
 POPE stay flat; MME shows a small dip at $\lambda{=}0$ that the regularizer
 removes. WikiText perplexity is below the base at every $\lambda$ (underlined
-best). Gen-CMMD is the CMMD between the adapter's and the base's image
-generations on a fixed prompt set ($N{=}128$); it stays flat near zero, so the
-text adapter does not measurably shift image generation. Subsampled battery,
-single seed.}
+best). Gen-CMMD is the CMMD between the adapter's and the base's image generations on a
+fixed prompt set ($N{=}128$); it stays flat near zero, so the text adapter does not
+measurably shift image generation. Subsampled, single seed.}
 \label{tab:text-kl}
 \end{table}
 
@@ -460,8 +490,9 @@ measure the CMMD between the text adapter's and the base's image generations on 
 fixed prompt set (Table~\ref{tab:text-kl}, bottom row): it stays flat and near zero
 ($\sim\!1.7\times10^{-3}$) at every $\lambda$, so specializing the text stream does
 not measurably shift image generation. The remaining gap is free-form \emph{text}
-generation, which the likelihood battery does not capture; we will quantify it with
-distributional metrics (e.g.\ MAUVE) in a final version.
+generation, which the likelihood results do not capture; we leave its measurement
+to future work.
+
 
 \paragraph{Beyond a single text domain.}
 To test that the text-direction result is not specific to poetry, we replicate the
@@ -471,7 +502,7 @@ substantially stronger than for poetry: held-out PubMed perplexity falls from
 $12.8$ to $8.4$, and on the comparable distance probe the domain moves from
 $1.23\times$ the general-text control (harder than generic text) to $0.79\times$
 (easier than generic text), confirming a large domain shift. Despite this strong
-adaptation, the forgetting battery stays at the base level
+adaptation, the forgetting stays at the base level
 (Table~\ref{tab:text-domain}: MMLU $0.492\!\to\!0.495$, POPE $0.877$, MME
 $1785\!\to\!1766$, WikiText PPL $13.71\!\to\!13.97$), and the image-generation
 direction shifts only marginally: the CMMD between the adapter's and the base's
@@ -490,7 +521,7 @@ holds even under a much stronger textual adaptation than poetry.
 \multicolumn{3}{l}{\textit{Acquisition (domain text)}}\\
 PubMed PPL $\times$control $\downarrow$ & $1.23\times$ & $\mathbf{0.79\times}$ \\
 \midrule
-\multicolumn{3}{l}{\textit{Interference (forgetting battery)}}\\
+\multicolumn{3}{l}{\textit{Interference}}\\
 WikiText PPL $\downarrow$ & $13.71_{\pm.21}$ & $13.97_{\pm.21}$ \\
 MMLU $\uparrow$           & $.492_{\pm.013}$  & $.495_{\pm.013}$ \\
 POPE acc $\uparrow$       & $.877_{\pm.006}$  & $.877_{\pm.006}$ \\
@@ -504,10 +535,69 @@ Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $1.77$ \\
 (medicine, \texttt{ccdv/pubmed-summarization}; $r{=}32$, $\lambda{=}0.25$). The
 adapter strongly acquires the domain (PubMed perplexity from $1.23\times$ to
 $0.79\times$ the general-text control, i.e.\ medical text becomes \emph{easier}
-than generic text), while the forgetting battery stays at the base level and image
+than generic text), while the forgetting stays at the base level and image
 generation is essentially unchanged (Gen-CMMD near poetry's). Strong textual
-adaptation therefore does not degrade the image-generation direction.}
+adaptation therefore does not degrade the image-generation direction.
+This table uses the \emph{full} forgetting probes, so its base absolute values
+(e.g.\ MME $1785$) differ from the light-config poetry/Welsh tables; the
+comparison is within-table against the base column.}
 \label{tab:text-domain}
+\end{table}
+
+\paragraph{A genuinely unseen target: a new language.}
+Poetry and medicine both lie within the base's competence (poetic English,
+medical English), so the absence of forgetting could be attributed to a weak
+intervention. We therefore add a third, deliberately harder target: a different
+\emph{language}, Welsh (\texttt{wikimedia/wikipedia}, Welsh subset; $r{=}32$,
+$\lambda{=}0.1$), selected by a distance probe over candidate low-resource and
+constructed languages. Acquisition is the strongest of the three text targets:
+held-out Welsh perplexity falls from $40.7$ to $14.6$ ($-64\%$), and on Welsh
+seeds the adapter sustains Welsh where the base slips into English or its
+assistant persona (Appendix~\ref{app:welsh-examples}). Despite acquiring an entire
+new language, the forgetting stays at the base level (Table~\ref{tab:welsh}: MMLU
+$.481\!\to\!.479$, POPE $.875\!\to\!.876$, MME $1130\!\to\!1124$, WikiText PPL
+$13.71\!\to\!12.07$), and the image-generation direction is essentially unchanged:
+the CMMD between the adapter's and the base's generations is $1.7\times10^{-3}$
+(Gen-CMMD), the same order as poetry and medicine. Two observations sharpen the
+result. First, this strongest acquisition requires the \emph{smallest} weight
+change of the three text adapters ($\lVert\Delta W\rVert/\lVert W\rVert = 0.6\%$,
+vs.\ $1.3\%$ for poetry and $1.7\%$ for medicine), despite using the weakest
+regularizer ($\lambda{=}0.1$): the new capability appears to be unlocked rather
+than built, i.e.\ partly latent in the pretrained backbone. Second, under the
+adapter English prompts are still continued in English (no language bleed), so the
+language is added without overwriting the existing one. The central assumption ---
+that specializing the text stream does not degrade image generation --- therefore
+holds even under the acquisition of a new language.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{12pt}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Base} & \textbf{Welsh LoRA} \\
+\midrule
+\multicolumn{3}{l}{\textit{Acquisition (target language)}}\\
+Welsh held-out PPL $\downarrow$ & $40.7$ & $\mathbf{14.6}$ \\
+$\lVert\Delta W\rVert/\lVert W\rVert$ & --- & $0.6\%$ \\
+\midrule
+\multicolumn{3}{l}{\textit{Interference}}\\
+WikiText PPL $\downarrow$ & $13.71_{\pm.21}$ & $12.07_{\pm.18}$ \\
+MMLU $\uparrow$           & $.481_{\pm.021}$  & $.479_{\pm.016}$ \\
+POPE acc $\uparrow$       & $.875_{\pm.010}$  & $.876_{\pm.010}$ \\
+MME $\uparrow$            & $1130_{\pm42}$  & $1124_{\pm42}$ \\\midrule
+\multicolumn{3}{l}{\textit{Generation shift from base (image direction)}}\\
+Gen-CMMD $\downarrow$ ($\times10^{-3}$) & $0$ & $1.73$ \\
+\bottomrule
+\end{tabular}
+\caption{Welsh language target (\texttt{wikimedia/wikipedia}, Welsh; $r{=}32$,
+$\lambda{=}0.1$). The adapter strongly acquires the language (held-out perplexity
+$40.7\!\to\!14.6$, $-64\%$) --- the largest acquisition of the three text
+targets --- yet needs the smallest weight change ($0.6\%$). Knowledge (MMLU),
+grounded understanding (POPE/MME) and general English (WikiText) stay at the base
+level, and image generation is essentially unchanged (Gen-CMMD near
+poetry/medicine). Light probe config (base column = base\_light); standard
+errors from evaluation-set resampling.}
+\label{tab:welsh}
 \end{table}
 
 \section{Discussion}
@@ -534,17 +624,18 @@ heatmaps (Appendix Fig.~\ref{fig:dw-heatmap}) confirm it is localized, attention
 $q/k/v$ near-untouched, the change concentrated in the MLP (broad \texttt{gate}
 for text, final-layer \texttt{down} for image), so the global percentage
 understates the local effect.
-
 \section{Conclusion and Future Work}
 We studied the modularity of LoRA fine-tuning on a unified multimodal model. With
 fine-tuning targets chosen by distance from the base, specializing the generation
 direction leaves the other capabilities unchanged on public benchmarks, robustly
 across rank and KL, and specializing the text direction preserves knowledge and
-understanding while acquiring the style. Future work: quantifying generative
-quality with distributional metrics (CMMD, and FID/ArtFID at scale) and multiple
-seeds; the adapter-placement study along Janus' decoupled pathways; replication on
-additional styles (pixel art); and extending to joint multi-direction training and
-to a third direction (visual question answering).
+understanding while acquiring the style. Future work: quantifying free-form
+generative quality with distributional metrics (MAUVE for text; CMMD and
+FID/ArtFID at scale for images) and averaging over multiple training seeds, which
+would also let us test the small WikiText-perplexity improvement as genuine
+positive transfer; the adapter-placement study along Janus' decoupled pathways;
+replication on additional styles (pixel art); and extending to joint
+multi-direction training and to a third direction (visual question answering).
 
 \bibliographystyle{plainnat}
 \bibliography{references}
@@ -580,10 +671,30 @@ changes within a sweep.
 \paragraph{Optimization (common).}
 AdamW with $\beta=(0.9,0.95)$ (matching the Janus pre-training $\beta_2$) and zero
 weight decay, a cosine schedule with $5\%$ warmup, gradient accumulation $8$,
-gradient clipping $1.0$, \texttt{bfloat16}, single H100. The KL-to-base
-regularizer is Eq.~\eqref{eq:kl}; its reference $p_{\text{base}}$ is a
-\texttt{disable\_adapter()} no-grad forward on the same inputs
-($\approx$$2\times$ forward cost).
+gradient clipping $1.0$, \texttt{bfloat16}, single H100. With the regularizer the
+loss is
+$\mathcal{L}=\mathrm{CE}+\lambda\,\mathrm{KL}(p_{\text{adapter}}\|p_{\text{base}})$,
+where $p_{\text{base}}$ is a \texttt{disable\_adapter()} no-grad forward on the
+same inputs ($\approx$$2\times$ forward cost).
+
+\paragraph{Uncertainty quantification.}
+We report each number as $\text{mean}\pm$ one standard error, computed without
+retraining and with an estimator-appropriate method per metric type. The accuracy
+benchmarks (MMLU, POPE, MME) are proportions of correct items over a fixed
+evaluation set, so their standard error follows the binomial/Wilson form
+\citep{wilson1927,brown2001interval}. Per-instance metrics averaged over the
+generated set (CLIP directional similarity, DINO similarity, CLIP-IQA) use
+$s/\sqrt{n}$ over the $n$ generations, equivalently a nonparametric bootstrap
+\citep{efron1993bootstrap}. The set-level distributional metrics (CMMD, KID) have
+no closed-form variance, so their standard error is the standard deviation of a
+nonparametric bootstrap over the generated and reference sets ($B{=}2000$
+resamples) \citep{efron1993bootstrap,binkowski2018demystifying}. Perplexity is a
+monotone transform of the mean per-chunk negative log-likelihood, whose standard
+error propagates through the exponential. All standard errors quantify
+evaluation-set sampling noise at fixed model weights; they do not capture
+training-seed variance. The small benchmark movements we observe (e.g.\ MMLU
+$0.492\!\to\!0.479$, within $\sim\!1$ standard error) thus lie within sampling
+noise, whereas the acquisition shifts (e.g.\ CMMD, DirSim) do not.
 
 \paragraph{Text (poetry) runs.}
 Data: \texttt{biglam/gutenberg-poetry-corpus}, grouped by source document with
@@ -619,25 +730,6 @@ adapter (Figure~\ref{fig:t2i_text_kl}) uses four neutral prompts (e.g.\ ``a cat
 sitting on a chair''). All conditions share the same seed schedule, so within a
 row the adapter is the only source of variation.
 
-\paragraph{Uncertainty quantification.}
-We report each number as $\text{mean}\pm$ one standard error, computed without
-retraining and with an estimator-appropriate method per metric type. The accuracy
-benchmarks (MMLU, POPE, MME) are proportions of correct items over a fixed
-evaluation set, so their standard error follows the binomial/Wilson form
-\citep{wilson1927,brown2001interval}. Per-instance metrics averaged over the
-generated set (CLIP directional similarity, DINO similarity, CLIP-IQA) use
-$s/\sqrt{n}$ over the $n$ generations, equivalently a nonparametric bootstrap
-\citep{efron1993bootstrap}. The set-level distributional metrics (CMMD, KID) have
-no closed-form variance, so their standard error is the standard deviation of a
-nonparametric bootstrap over the generated and reference sets ($B{=}2000$
-resamples) \citep{efron1993bootstrap,binkowski2018demystifying}. Perplexity is a
-monotone transform of the mean per-chunk negative log-likelihood, whose standard
-error propagates through the exponential. All standard errors quantify
-evaluation-set sampling noise at fixed model weights; they do not capture
-training-seed variance. The small benchmark movements we observe (e.g.\ MMLU
-$0.492\!\to\!0.479$, within $\sim\!1$ standard error) thus lie within sampling
-noise, whereas the acquisition shifts (e.g.\ CMMD, DirSim) do not.
-
 
 \section{Image-generation configuration: incremental ablation}
 \label{app:recipe}
@@ -669,7 +761,7 @@ LR ($\times10^{-5}$)  & 5 & 5 & \textbf{8} & \textbf{10} & 10 & 10 \\
 Epochs               & 8 & 8 & \textbf{6} & 6 & 6 & 6 \\
 LoRA dropout         & .05 & .05 & \textbf{.10} & .10 & .10 & .10 \\
 Train prefix         & yes & yes & \textbf{no} & no & no & no \\
-KL $\lambda$         & --- & \textbf{0.5} & 0.5 & 0.5 & 0.5 & 0.5 \\
+KL $\lambda$         & 0 & \textbf{0.5} & 0.5 & 0.5 & 0.5 & 0.5 \\
 Joint text           & --- & --- & --- & --- & \textbf{matched} & \textbf{far} \\
 \midrule
 \multicolumn{7}{l}{\textit{Acquisition (vs.\ real style, $N{=}80$; bold = best)}}\\
@@ -793,10 +885,10 @@ Base (no adapter) & ---                  & $13.71$ & $0.492$ & $0.877$ & $1785$ 
 Final (image-only)& ---                  & $13.80$ & $0.491$ & $0.879$ & $1789$ \\
 Joint matched     & near, 320 chunks     & $47.87$ & $0.505$ & $0.876$ & $1747$ \\
 Joint far         & distant, 7672 chunks & $12.46$ & $0.491$ & $0.878$ & $1795$ \\
-Joint far@320     & distant, 320 chunks  & $55.10$ & $0.481$ & $0.873$ & --- \\
+Joint far@320     & distant, 320 chunks  & $55.10$ & $0.481$ & $0.873$ & $1736$ \\
 \bottomrule
 \end{tabular}
-\caption{Corpus-size control on the forgetting battery. Perplexity inflation
+\caption{Corpus-size control on the forgetting. Perplexity inflation
 tracks corpus size, not domain distance; knowledge and understanding are
 unaffected.}
 \label{tab:joint}
@@ -805,28 +897,6 @@ unaffected.}
 
 \section{Qualitative grids}
 \label{app:grids}
-
-\begin{figure}[!t]
-\centering
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/base_zebra.png}
-\caption*{Base}\end{subfigure}\hfill
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/adapter_zebra.png}
-\caption*{Sketch LoRA}\end{subfigure}\hfill
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/base_kite.png}
-\caption*{Base}\end{subfigure}\hfill
-\begin{subfigure}[t]{0.23\textwidth}\centering
-\includegraphics[width=\linewidth]{figs/sketch_comparison/adapter_kite.png}
-\caption*{Sketch LoRA}\end{subfigure}
-\caption{Generalisation to line-sketch scenes (temporary samples, same
-prompt/seed base vs.\ adapter). The style transfers for some prompts (left pair:
-white canvas, ink linework) but only partially for others (right pair: sketch
-strokes appear yet photographic colour persists), consistent with the weaker,
-dataset-dependent acquisition in Table~\ref{tab:sketch}.}
-\label{fig:sketch}
-\end{figure}
 
 \begin{figure*}[p]
 \centering
@@ -1147,6 +1217,9 @@ scriptural citation (bottom).}
 \label{tab:text-examples}
 \end{table}
 
+
+
+
 \section{Regularizer ablation}
 \label{app:reg-ablation}
 We compare the KL-to-base regularizer at fixed rank 32 in the image-generation
@@ -1160,14 +1233,14 @@ trigger-free protocol used in the rest of the paper; we also report each adapter
 intervention strength $\lVert\Delta W\rVert_F/\lVert W\rVert_F$. The KL attains the
 best distributional acquisition of all methods: at essentially the same
 intervention strength as the unregularized baseline ($1.57$ vs.\ $1.55\%$) it
-reaches a markedly lower CMMD ($.120$ vs.\ $.165$), i.e.\ it \emph{redirects} the
+reaches a markedly lower CMMD ($.108$ vs.\ $.155$), i.e.\ it \emph{redirects} the
 update rather than merely shrinking it. Logit-MSE over-constrains the output
 distribution: it keeps image quality high but barely transfers the style without a
 prompt trigger (DirSim $.029$, the worst of all methods), which the prompt-triggered
 evaluation had masked. Weight-space L2-SP simply shrinks the update (to $0.60\%$).
 The Anole reconstruction loss acquires the style comparably to the unregularized
 baseline (DirSim $.162$) but with worse distributional fidelity than the KL (CMMD
-$.157$ vs.\ $.120$) and, being an acquisition term rather than a base anchor, offers
+$.148$ vs.\ $.108$) and, being an acquisition term rather than a base anchor, offers
 no forgetting protection. The KL alone attains the best acquisition while keeping
 the adapter anchored to the base. Single-seed run.
 
@@ -1177,11 +1250,11 @@ the adapter anchored to the base. Single-seed run.
 \toprule
 Regularizer & $\lVert\Delta W\rVert/\lVert W\rVert$ & CMMD $\downarrow$ & KID $\downarrow$ & DINO $\uparrow$ & CLIP-IQA $\uparrow$ & DirSim $\uparrow$ \\
 \midrule
-None ($\lambda{=}0$) & $1.55\%$ & $.165_{\pm.009}$ & $.029_{\pm.004}$ & $.626_{\pm.013}$ & $.666_{\pm.011}$ & $.157_{\pm.007}$ \\
-L2-SP                & $0.60\%$ & $.150_{\pm.009}$ & $.023_{\pm.004}$ & $.624_{\pm.011}$ & $.683_{\pm.008}$ & $\mathbf{.164}_{\pm.007}$ \\
-Logit-MSE            & $1.14\%$ & $.229_{\pm.012}$ & $.106_{\pm.011}$ & $.410_{\pm.018}$ & $\mathbf{.725}_{\pm.014}$ & $.029_{\pm.006}$ \\
-KL-to-base (ours)    & $1.57\%$ & $\mathbf{.120}_{\pm.010}$ & $\mathbf{.018}_{\pm.004}$ & $\mathbf{.643}_{\pm.013}$ & $.691_{\pm.010}$ & $.153_{\pm.007}$ \\
-Anole (recon)        & $1.56\%$ & $.157_{\pm.009}$ & $.028_{\pm.005}$ & $.637_{\pm.011}$ & $.666_{\pm.010}$ & $.162_{\pm.007}$ \\
+None ($\lambda{=}0$) & $1.55\%$ & $.155_{\pm.009}$ & $.027_{\pm.004}$ & $.626_{\pm.013}$ & $.666_{\pm.011}$ & $.157_{\pm.007}$ \\
+L2-SP                & $0.60\%$ & $.139_{\pm.009}$ & $.018_{\pm.004}$ & $.624_{\pm.011}$ & $.683_{\pm.008}$ & $\mathbf{.164}_{\pm.007}$ \\
+Logit-MSE            & $1.14\%$ & $.216_{\pm.012}$ & $.106_{\pm.011}$ & $.410_{\pm.018}$ & $\mathbf{.725}_{\pm.014}$ & $.029_{\pm.006}$ \\
+KL-to-base (ours)    & $1.57\%$ & $\mathbf{.108}_{\pm.010}$ & $\mathbf{.014}_{\pm.004}$ & $\mathbf{.643}_{\pm.013}$ & $.691_{\pm.010}$ & $.153_{\pm.007}$ \\
+Anole (recon)       & $1.56\%$ & $.148_{\pm.009}$ & $.026_{\pm.005}$ & $.637_{\pm.011}$ & $.666_{\pm.010}$ & $.162_{\pm.007}$ \\
 \bottomrule
 \end{tabular}
 \caption{Regularizer ablation at rank 32 (image direction, $N{=}80$, single seed;
@@ -1189,34 +1262,13 @@ $\pm$ one standard error; bold = best per metric). Under the canonical,
 trigger-free evaluation, the KL attains the best distributional acquisition
 (CMMD, KID, DINO), separating clearly from the no-regularizer baseline at matched
 intervention strength ($\lVert\Delta W\rVert/\lVert W\rVert$ $1.57$ vs.\ $1.55\%$,
-CMMD $.120$ vs.\ $.165$). Logit-MSE over-constrains the output distribution and
+CMMD $.108$ vs.\ $.155$). Logit-MSE over-constrains the output distribution and
 barely transfers the style without the prompt trigger (DirSim $.029$) despite high
 image quality; L2-SP merely shrinks the update. The Anole reconstruction loss
 acquires the style comparably to the unregularized baseline but with worse
 distributional fidelity than the KL and no base anchoring.}
 \label{tab:reg-ablation}
 \end{table}
-
-\section{Probing the model with custom prompts}
-\label{app:probe}
-For reproducibility and qualitative inspection, we provide two scripts that load
-Janus-Pro-7B together with the text (poetry) and image (Naruto) adapters and
-compare all three on identical inputs. The first renders user-supplied text
-prompts as images under each model (a by-eye cross-modal check that the text
-adapter leaves generation unchanged); the second is an interactive chat that
-answers each question with the three models side by side.
-
-Image generation from custom prompts (same seed across the three models):
-\begin{verbatim}
-PROMPTS="a cat on a chair;a red car on a street" \
-    sbatch janus/tests/04_run_three_way_gen.sh
-\end{verbatim}
-
-Three-way text chat (type a question, get three answers):
-\begin{verbatim}
-python janus/tests/05_chat_3way.py
-# > What is the capital of the Philippines?
-\end{verbatim}
 
 \clearpage
 \section{Metric debugging: is the $\lambda$ optimum a bug, memorization, or noise?}
@@ -1239,9 +1291,7 @@ similarity between the adapter's image and the base image for the same prompt --
 rises from $.32$ at $\lambda{=}0.25$ to $.39$ at $\lambda{=}0.5$. The CLIP style
 metrics reward pure style proximity (optimum $\lambda{=}0.25$); the DINO
 distribution distance and content preservation reward style transfer that keeps
-the prompt content (optimum $\lambda{=}0.5$), which is what the eye weighs, and
-what an independent VLM judge confirms (Table~\ref{tab:judge}). This justifies the
-$\lambda{=}0.5$ Final recipe.
+the prompt content (optimum $\lambda{=}0.5$), which is what the eye weighs, and what an independent VLM judge confirms (Table~\ref{tab:judge}). This justifies the $\lambda{=}0.5$ Final recipe.
 
 \begin{table}[h]
 \centering\small
@@ -1338,6 +1388,85 @@ adapter off (top) vs.\ on (bottom). Generations are essentially unchanged,
 confirming the text adapter does not degrade the generation direction (cf.\ the
 near-zero Gen-CMMD).}
 \label{fig:med-t2i}
+\end{figure}
+
+\section{Welsh text-direction qualitative examples}
+\label{app:welsh-examples}
+Base-vs-adapter continuations for the Welsh text-LoRA ($r{=}32$, $\lambda{=}0.1$);
+the base is the identical model with the adapter disabled. Greedy decoding,
+repetition penalty $1.3$. Two readings: (i) on \emph{Welsh} seeds the adapter
+sustains Welsh while the base breaks into English/assistant text (acquisition);
+(ii) on the \emph{English} seed the adapter stays in English (no bleed). As with
+poetry, greedy decoding is locally repetitive; sampled decoding ($T{=}0.9$, last
+row) is more fluent.
+
+\begin{table}[t]\centering\small
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}p{0.45\linewidth}p{0.45\linewidth}@{}}
+\toprule
+\multicolumn{2}{@{}l}{\textit{Welsh seed:} ``Mae Cymru yn wlad\,\dots'' (\textit{Wales is a country})}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Welsh LoRA}\\[2pt]
+\footnotesize fod â'r eich, a dda i gael \dots\ Hello Mae! I am happy to help you
+with your Welsh language question.
+&
+\footnotesize fwyaf o'r gogledd-ddinasol a ddau 10,578.234 iawn (a chyfansoddwyd
+gan yr Aelodau Canolfan Llyfrau Genedlaethol). Mae hynny wedi ei bod arall am\,\dots\\
+\midrule
+\multicolumn{2}{@{}l}{\textit{English seed:} ``The history of Wales\,\dots''}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Welsh LoRA}\\[2pt]
+\footnotesize is a long and complex one, with many different cultures influencing
+its development over the centuries. Hello!
+&
+\footnotesize is a long and complex one, with many different cultures influencing
+the country over time. I will be writing about some key events in Welsh History
+that have shaped our nation today\,\dots\\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Welsh seed (sampled, $T{=}0.9$):} ``Yr oedd unwaith\,\dots'' (\textit{There was once})}\\
+\midrule
+\textbf{Base (adapter off)} & \textbf{Welsh LoRA}\\[2pt]
+\footnotesize Hello world \dots\ Wyt yn agor fod dinio? Nochthawd, bye!
+&
+\footnotesize a byddai'n anhysbys, neu llawn barwas yng ngogleddol rhagolig sydd
+wedi bod yn enwu am fod fel cysgu gerfansau pencampell\,\dots\\
+\bottomrule
+\end{tabular}
+\caption{Welsh text-direction qualitative examples ($r{=}32$, $\lambda{=}0.1$). On
+Welsh seeds the adapter sustains Welsh where the base slips into English/assistant
+text; on the English seed it stays in English (no bleed). Greedy rows are locally
+repetitive; the sampled row is more fluent.}
+\label{tab:welsh-examples}
+\end{table}
+
+\begin{figure}[t]\centering
+\setlength{\tabcolsep}{1.5pt}\renewcommand{\arraystretch}{0.8}\small
+\begin{tabular}{cc}
+\textbf{Base} & \textbf{Welsh LoRA}\\
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt0_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt0_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a red fox sitting in a snowy forest at dawn}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt2_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt2_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a close-up portrait of an elderly fisherman with a wool cap}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt4_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt4_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a futuristic city skyline at night with neon lights}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt6_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt6_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{a plate of spaghetti with tomato sauce and fresh basil}}\\
+\addlinespace[1pt]
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt7_base.png} &
+\includegraphics[width=0.30\linewidth]{figs/t2i_text/welsh/prompt7_adapter.png}\\
+\multicolumn{2}{c}{\scriptsize\textit{an astronaut riding a horse on the surface of Mars}}\\
+\end{tabular}
+\caption{Image generation under the Welsh text adapter ($r{=}32$, $\lambda{=}0.1$),
+base vs adapter on identical prompts and seeds. Generations stay close to the base,
+consistent with the near-zero Gen-CMMD ($1.7\times10^{-3}$, Table~\ref{tab:welsh}).}
+\label{fig:t2i_welsh}
 \end{figure}
 
 \end{document}

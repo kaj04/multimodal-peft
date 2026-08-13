@@ -174,6 +174,10 @@ EVAL_MID_N       = int(os.environ.get("EVAL_MID_N", "10"))      # small for spee
 # RNG + counters) so a crashed or time-limited run can pick up where it left off.
 SAVE_EVERY_STEPS = int(os.environ.get("SAVE_EVERY_STEPS", "0"))   # 0 = only at epoch end
 RESUME           = os.environ.get("RESUME", "1") == "1"           # default: auto-resume if state exists
+# Sequential (continual) chaining: start from a PREVIOUS run's LoRA weights with
+# a fresh optimizer/scheduler/epoch counter. Distinct from RESUME, which
+# continues an interrupted run of the same task. See train/_chain_init.py.
+INIT_ADAPTER     = os.environ.get("INIT_ADAPTER", "")
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "janus-peft")
 RUN_NAME      = os.environ.get("RUN_NAME", "gen_1b_r8_valsplit")
@@ -653,6 +657,10 @@ def main():
                           task_type=TaskType.CAUSAL_LM)
     # Inject in-place: keep `base` for the custom forward, `peft_model` to save.
     peft_model = get_peft_model(base, lora_cfg)
+    if INIT_ADAPTER:
+        from _chain_init import init_from_adapter
+        init_from_adapter(peft_model, INIT_ADAPTER,
+                          expect_rank=LORA_RANK, expect_modules=TARGET_MODULES)
     base.train()
     trainable = [p for p in base.parameters() if p.requires_grad]
     total_params = sum(p.numel() for p in base.parameters())

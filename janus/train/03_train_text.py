@@ -98,6 +98,10 @@ SAMPLE_TOKENS      = int(os.environ.get("SAMPLE_TOKENS", "60"))
 # Resume / checkpoint
 SAVE_EVERY_STEPS = int(os.environ.get("SAVE_EVERY_STEPS", "200"))
 RESUME           = os.environ.get("RESUME", "1") == "1"
+# Sequential (continual) chaining: start from a PREVIOUS run's LoRA weights with
+# a fresh optimizer/scheduler/epoch counter. Distinct from RESUME, which
+# continues an interrupted run of the same task. See train/_chain_init.py.
+INIT_ADAPTER     = os.environ.get("INIT_ADAPTER", "")
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "janus-peft")
 RUN_NAME      = os.environ.get("RUN_NAME", "text_7b_poetry_v1")
@@ -404,6 +408,10 @@ def main():
                           lora_dropout=LORA_DROPOUT, bias="none",
                           task_type=TaskType.CAUSAL_LM)
     peft_model = get_peft_model(base, lora_cfg)
+    if INIT_ADAPTER:
+        from _chain_init import init_from_adapter
+        init_from_adapter(peft_model, INIT_ADAPTER,
+                          expect_rank=LORA_RANK, expect_modules=TARGET_MODULES)
     base.train()
     trainable = [p for p in base.parameters() if p.requires_grad]
     tot = sum(p.numel() for p in base.parameters())

@@ -69,10 +69,14 @@ E3=$(sbatch --parsable --dependency=afterok:"$J3" \
      "$CH/eval_step.sh")
 echo "  step3  train $J3  ->  eval $E3   ($T3, on top of anime)"
 
+# The final eval id is recorded so run_both.sh can hang the matrix job off
+# both chains without parsing this output.
+echo "$E3" > "$EVAL_OUT/chain/.last_job_${CHAIN}"
+
 echo "------------------------------------------------------------------"
 echo "  trainings run back to back; each eval starts as soon as its own"
 echo "  training succeeds, so evaluation overlaps the next training."
 echo "  monitor : squeue -u \$USER -o \"%.10i %.12j %.8T %.10M %R\""
 echo "  logs    : $EVAL_OUT/chain/"
-echo "  matrix  : python janus/eval/36_chain_matrix.py   (after both chains)"
+echo "  last eval job for chain $CHAIN : $E3"
 echo "=================================================================="

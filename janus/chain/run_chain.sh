@@ -5,6 +5,13 @@
 #    bash janus/chain/run_chain.sh A      # welsh -> anime -> medicine
 #    bash janus/chain/run_chain.sh B      # medicine -> anime -> welsh
 #
+#  FROM_STEP=2 resumes from the image step, reusing the step-1 adapter that is
+#  already on disk. Use it when a later step failed and the earlier training is
+#  still valid; there is no reason to spend hours reproducing an adapter that
+#  already exists.
+#
+#    FROM_STEP=2 bash janus/chain/run_chain.sh A
+#
 #  B is the exact reverse of A, so the two chains differ ONLY in order. The
 #  image step sits in the middle of both: it is a control, not a variable.
 #  Welsh and medicine each appear once first and once last, which is what
@@ -42,17 +49,30 @@ echo "  CHAIN $CHAIN :  $T1 (text)  ->  anime (image)  ->  $T3 (text)"
 echo "  r=$LORA_RANK  lambda=$KL_LAMBDA  epochs text=$TEXT_EPOCHS image=$IMAGE_EPOCHS"
 echo "=================================================================="
 
+FROM_STEP="${FROM_STEP:-1}"
+
 # --- step 1: text, from the frozen base -------------------------------
-J1=$(sbatch --parsable \
-     --export=ALL,RUN_NAME=$R1,CORPUS=$T1,INIT_ADAPTER= \
-     "$CH/train_text_step.sh")
-E1=$(sbatch --parsable --dependency=afterok:"$J1" \
-     --export=ALL,TAG=$R1,ADAPTER=$A1,STEP=1 \
-     "$CH/eval_step.sh")
-echo "  step1  train $J1  ->  eval $E1   ($T1, from base)"
+if [ "$FROM_STEP" -le 1 ]; then
+  J1=$(sbatch --parsable \
+       --export=ALL,RUN_NAME=$R1,CORPUS=$T1,INIT_ADAPTER= \
+       "$CH/train_text_step.sh")
+  E1=$(sbatch --parsable --dependency=afterok:"$J1" \
+       --export=ALL,TAG=$R1,ADAPTER=$A1,STEP=1 \
+       "$CH/eval_step.sh")
+  echo "  step1  train $J1  ->  eval $E1   ($T1, from base)"
+  DEP1="--dependency=afterok:$J1"
+else
+  if [ ! -e "$A1" ]; then
+    echo "  FATAL: FROM_STEP=$FROM_STEP but the step-1 adapter is missing:"
+    echo "         $A1"
+    exit 2
+  fi
+  echo "  step1  SKIPPED, reusing $A1"
+  DEP1=""
+fi
 
 # --- step 2: image, starting from step 1 ------------------------------
-J2=$(sbatch --parsable --dependency=afterok:"$J1" \
+J2=$(sbatch --parsable $DEP1 \
      --export=ALL,RUN_NAME=$R2,INIT_ADAPTER=$A1 \
      "$CH/train_image_step.sh")
 E2=$(sbatch --parsable --dependency=afterok:"$J2" \

@@ -25,9 +25,9 @@ mkdir -p "$EVAL_OUT/chain"
 
 rm -f "$EVAL_OUT/chain/.last_job_A" "$EVAL_OUT/chain/.last_job_B"
 
-bash "$CH/run_chain.sh" A
+FROM_STEP="${FROM_STEP:-1}" bash "$CH/run_chain.sh" A
 echo
-bash "$CH/run_chain.sh" B
+FROM_STEP="${FROM_STEP:-1}" bash "$CH/run_chain.sh" B
 echo
 
 LA=$(cat "$EVAL_OUT/chain/.last_job_A" 2>/dev/null || true)

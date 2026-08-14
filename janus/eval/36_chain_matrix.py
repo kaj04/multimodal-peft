@@ -79,10 +79,15 @@ def collect(chain, steps):
         # 06_metrics_panel.py writes to <root>/<parent>__<name>/metrics_panel.json
         # where the directory is derived from the ADAPTER path, and nests the
         # values as results["after"]["CMMD"]["value"] / ["delta"]["CLIP_DirSim"].
+        # The file lands at
+        #   <tag>/image_metrics/metrics_panel/<parent>__<name>/metrics_panel.json
+        # because 06 appends "metrics_panel" to JANUS_OUTPUT_DIR and then a
+        # directory derived from the adapter path. Search recursively rather
+        # than hard-coding that depth.
         rec["cmmd"] = rec["dirsim"] = None
         im_root = CHAIN_DIR / tag / "image_metrics"
-        for d in sorted(im_root.glob("*")) if im_root.is_dir() else []:
-            im = load_json(d / "metrics_panel.json")
+        for p in sorted(im_root.rglob("metrics_panel.json")) if im_root.is_dir() else []:
+            im = load_json(p)
             if not im:
                 continue
             after = im.get("after", {})

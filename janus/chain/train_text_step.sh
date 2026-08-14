@@ -46,8 +46,20 @@ export EPOCHS="$TEXT_EPOCHS"
 export LORA_DROPOUT="$TEXT_DROPOUT"
 export INIT_ADAPTER
 
+# Same guard as the image step. 03 happens to default to the 7B and 02 to the
+# 1B, which is why only the image direction broke, but a chain whose steps load
+# different models cannot work at all and the failure is invisible until an
+# adapter load rejects the width. Check it on both sides.
+case "$MODEL_ID" in
+  *7B*) : ;;
+  *) echo "  FATAL: MODEL_ID='$MODEL_ID' is not the 7B model. Every step of a"
+     echo "         chain must load the same model."
+     exit 2 ;;
+esac
+
 echo "=================================================================="
 echo "  CHAIN TEXT STEP | run=$RUN_NAME  corpus=$CORPUS"
+echo "  MODEL_ID=$MODEL_ID"
 echo "  init_adapter=${INIT_ADAPTER:-<none, fresh from base>}"
 echo "  r=$LORA_RANK alpha=$LORA_ALPHA lambda=$KL_LAMBDA epochs=$EPOCHS"
 echo "  windows=$TRAIN_WINDOWS val=$VAL_WINDOWS  resume=$RESUME"

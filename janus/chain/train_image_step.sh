@@ -32,7 +32,14 @@ export HF_HOME=/scratch-shared/tesr125338/hf_cache
 : "${RUN_NAME:?set RUN_NAME}"
 INIT_ADAPTER="${INIT_ADAPTER:-}"
 
+# DATASET_SOURCE is what selects the corpus; without it 02 falls back to COCO.
+export DATASET_SOURCE="$IMAGE_DATASET_SOURCE"
 export HF_DATASET_NAME="$IMAGE_DATASET"
+export HF_IMAGE_COL="$IMAGE_COL"
+export HF_TEXT_COL="$IMAGE_TEXT_COL"
+export TRAIN_N="$IMAGE_TRAIN_N"
+export EVAL_N="$IMAGE_EVAL_N"
+export GEN_EVAL_N="$IMAGE_GEN_EVAL_N"
 export EPOCHS="$IMAGE_EPOCHS"
 export LORA_DROPOUT="$IMAGE_DROPOUT"
 export INIT_ADAPTER
@@ -40,10 +47,22 @@ export INIT_ADAPTER
 echo "=================================================================="
 echo "  CHAIN IMAGE STEP | run=$RUN_NAME"
 echo "  init_adapter=${INIT_ADAPTER:-<none, fresh from base>}"
+echo "  MODEL_ID=$MODEL_ID"
+echo "  dataset_source=$DATASET_SOURCE  dataset=$HF_DATASET_NAME"
 echo "  r=$LORA_RANK alpha=$LORA_ALPHA lambda=$KL_LAMBDA epochs=$EPOCHS"
 echo "  caption_prefix='${CAPTION_PREFIX}'  (must be empty)"
 echo "  started $(date)"
 echo "=================================================================="
+
+# Guard against the failure that cost the first attempt: 02 defaults to the 1B
+# model, so an unset or wrong MODEL_ID silently builds an adapter of the wrong
+# width and only fails once it tries to load the previous step's weights.
+case "$MODEL_ID" in
+  *7B*) : ;;
+  *) echo "  FATAL: MODEL_ID='$MODEL_ID' is not the 7B model. The chain's"
+     echo "         adapters are 4096-wide; loading any other model will fail."
+     exit 2 ;;
+esac
 
 if [ -n "$INIT_ADAPTER" ] && [ ! -e "$INIT_ADAPTER" ]; then
   echo "  FATAL: INIT_ADAPTER does not exist: $INIT_ADAPTER"; exit 2

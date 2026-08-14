@@ -25,6 +25,14 @@
 #  Learning-without-Forgetting, and we are diagnosing, not treating.
 # =====================================================================
 
+# ---- model: MUST be set explicitly ----
+# 03_train_text.py defaults to the 7B, but 02_train_generation.py defaults to
+# Janus-Pro-1B. Leaving it implicit made the image step load a 2048-wide model
+# and try to apply a 4096-wide adapter, which failed after one minute with a
+# wall of size mismatches. Both directions must load the same model or a chain
+# cannot exist at all.
+export MODEL_ID="deepseek-community/Janus-Pro-7B"
+
 # ---- structural: identical for every step of every chain ----
 export LORA_RANK=32
 export LORA_ALPHA=64
@@ -64,8 +72,17 @@ export MED_DATASET="ccdv/pubmed-summarization"
 export MED_CONFIG=""
 export MED_TEXT_COL="article"
 export MED_MAX_DOCS=40000
-# Image style
+# Image style. DATASET_SOURCE is what actually selects the corpus in
+# 02_train_generation.py; HF_DATASET_NAME alone is ignored unless it is "hf",
+# and the default is "coco" -- the first run trained on the wrong dataset.
+# These values are the ones the v5 recipe used.
+export IMAGE_DATASET_SOURCE="hf"
 export IMAGE_DATASET="lambdalabs/naruto-blip-captions"
+export IMAGE_COL="image"
+export IMAGE_TEXT_COL="text"
+export IMAGE_TRAIN_N=4000
+export IMAGE_EVAL_N=80
+export IMAGE_GEN_EVAL_N=20
 
 # ---- evaluation sizes (subsampled config, as used by the text tables) ----
 export MMLU_N=570

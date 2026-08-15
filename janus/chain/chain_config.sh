@@ -38,7 +38,7 @@ export LORA_RANK=32
 export LORA_ALPHA=64
 export TARGET_MODULES="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 export KL_LAMBDA=0.5
-export LR=1e-4
+export LR="${LR:-1e-4}"
 export LR_SCHEDULE=cosine
 export SEED=42
 

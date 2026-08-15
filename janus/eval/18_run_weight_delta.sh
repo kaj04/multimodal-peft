@@ -26,6 +26,15 @@ export TRANSFORMERS_OFFLINE=1
 JANUS_PY=$HOME/.conda/envs/janus/bin/python
 
 O=$HOME/multimodal-peft/janus/train/output
+
+# An ADAPTERS string passed in from outside wins over the default list built
+# below. Without this the runner silently overwrote whatever the caller asked
+# for and evaluated the default sweep instead, which is easy to miss because
+# the job still succeeds and produces a full-looking table.
+if [ -n "${ADAPTERS:-}" ]; then
+  echo "  ADAPTERS supplied by caller; skipping the default list."
+else
+
 A=""
 for r in 2 4 8 16 32 64; do A="$A;img_r$r=$O/gen_7b_rank_r$r/adapter_best"; done
 for kl in 0 025 1 15; do A="$A;img_kl$kl=$O/gen_7b_kl${kl}_r32/adapter_best"; done
@@ -41,6 +50,7 @@ for kl in 0 0.25 1 1.5; do A="$A;text_kl$(echo $kl|tr -d '.')=$O/text_poetry_r16
 A="$A;text_welsh=$O/text_7b_welsh_r32_kl0.1/adapter_best"
 A="$A;text_med=$O/text_med_r32_kl025/adapter_best"
 export ADAPTERS="${A#;}"
+fi
 
 echo "================================================================"
 echo "  weight-delta | Started: $(date)"

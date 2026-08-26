@@ -180,8 +180,14 @@ REG_TYPE = os.environ.get("REG_TYPE", "kl").lower()
 TEXT_KL_LAMBDA   = float(os.environ.get("TEXT_KL_LAMBDA", "0.0"))
 TEXT_KL_SEQ_LEN  = int(os.environ.get("TEXT_KL_SEQ_LEN", "256"))
 TEXT_KL_WINDOWS  = int(os.environ.get("TEXT_KL_WINDOWS", "512"))
-TEXT_KL_DATASET  = os.environ.get("TEXT_KL_DATASET", "wikitext")
+# Namespaced repo id: bare 'wikitext' is rejected by newer huggingface_hub,
+# as 07_forgetting_battery.py already records.
+TEXT_KL_DATASET  = os.environ.get("TEXT_KL_DATASET", "Salesforce/wikitext")
 TEXT_KL_CONFIG   = os.environ.get("TEXT_KL_CONFIG", "wikitext-2-raw-v1")
+# TRAIN split, deliberately: WikiText PPL is reported on the TEST split by
+# 07_forgetting_battery.py, and anchoring on the same text we then evaluate
+# would make the headline number of this experiment meaningless.
+TEXT_KL_SPLIT    = os.environ.get("TEXT_KL_SPLIT", "train")
 
 # LR schedule + optimisation
 WARMUP_RATIO  = float(os.environ.get("WARMUP_RATIO", "0.05"))   # 5% linear warmup
@@ -656,7 +662,7 @@ def build_text_anchor_windows(tok):
     order.
     """
     from datasets import load_dataset
-    ds = load_dataset(TEXT_KL_DATASET, TEXT_KL_CONFIG, split="train")
+    ds = load_dataset(TEXT_KL_DATASET, TEXT_KL_CONFIG, split=TEXT_KL_SPLIT)
     windows, buf = [], []
     for row in ds:
         line = row.get("text", "").strip()
@@ -718,7 +724,7 @@ def main():
     print(f"  text_kl_lambda={TEXT_KL_LAMBDA}  (0 = text head unprotected, the "
           f"default and what every published run used)")
     if TEXT_KL_LAMBDA > 0:
-        print(f"  text_anchor: {TEXT_KL_DATASET}/{TEXT_KL_CONFIG} "
+        print(f"  text_anchor: {TEXT_KL_DATASET}/{TEXT_KL_CONFIG} split={TEXT_KL_SPLIT} "
               f"seq_len={TEXT_KL_SEQ_LEN} windows={TEXT_KL_WINDOWS}")
     print(f"  dataset_source={DATASET_SOURCE}  lr_schedule={LR_SCHEDULE}")
     print(f"  caption_prefix={CAPTION_PREFIX!r}")

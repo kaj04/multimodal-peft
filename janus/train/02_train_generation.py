@@ -161,6 +161,28 @@ KL_LAMBDA = float(os.environ.get("KL_LAMBDA", "0.0"))
 #   "l2"  -> L2 on the LoRA parameters (weight decay toward the base; no base fwd)
 REG_TYPE = os.environ.get("REG_TYPE", "kl").lower()
 
+# --- Text-side anchor (TEXT_KL_LAMBDA) -------------------------------------
+# KL_LAMBDA above is computed on generation_head logits over the image codebook,
+# at image positions only. It therefore constrains how far the IMAGE
+# distribution may drift and says nothing about text. The LoRA weights are
+# shared with the language pathway, so in a chain an image step moves the shared
+# projections while the text head is neither supervised nor regularised, and it
+# drifts until greedy decoding emits only whitespace (see
+# janus/eval/43_first_token_collapse.py).
+#
+# This adds the mirror term: lambda_text * KL(p_adapter || p_base) on TEXT
+# logits over neutral text that belongs to no task. It is a pure anchor, not
+# replay -- there is no text CE, nothing is learned from the corpus, the model
+# is only asked not to move its text distribution away from the base.
+#
+# Default 0.0 keeps every existing run bit-identical. Enabling it roughly
+# doubles step time (one extra text forward with grad, one without).
+TEXT_KL_LAMBDA   = float(os.environ.get("TEXT_KL_LAMBDA", "0.0"))
+TEXT_KL_SEQ_LEN  = int(os.environ.get("TEXT_KL_SEQ_LEN", "256"))
+TEXT_KL_WINDOWS  = int(os.environ.get("TEXT_KL_WINDOWS", "512"))
+TEXT_KL_DATASET  = os.environ.get("TEXT_KL_DATASET", "wikitext")
+TEXT_KL_CONFIG   = os.environ.get("TEXT_KL_CONFIG", "wikitext-2-raw-v1")
+
 # LR schedule + optimisation
 WARMUP_RATIO  = float(os.environ.get("WARMUP_RATIO", "0.05"))   # 5% linear warmup
 WEIGHT_DECAY  = float(os.environ.get("WEIGHT_DECAY", "0.0"))    # 0 on LoRA is standard
@@ -624,6 +646,58 @@ def eval_clipscore(base, processor, scorer, eval_ids, id2file, refs, n):
 # Main
 # ---------------------------------------------------------------------------
 
+def build_text_anchor_windows(tok):
+    """Neutral text for the text-side anchor, sliced into fixed windows.
+
+    Deliberately WikiText and not any chain corpus: the anchor must not teach
+    the model anything about Welsh, medicine or anime, only hold its general
+    text distribution near the base. Windows are cut deterministically and the
+    order is shuffled with SEED, so two runs see the same text in the same
+    order.
+    """
+    from datasets import load_dataset
+    ds = load_dataset(TEXT_KL_DATASET, TEXT_KL_CONFIG, split="train")
+    windows, buf = [], []
+    for row in ds:
+        line = row.get("text", "").strip()
+        if len(line) < 64:          # skip headings and blank lines
+            continue
+        buf.extend(tok(line, add_special_tokens=False)["input_ids"])
+        while len(buf) >= TEXT_KL_SEQ_LEN:
+            windows.append(buf[:TEXT_KL_SEQ_LEN])
+            buf = buf[TEXT_KL_SEQ_LEN:]
+            if len(windows) >= TEXT_KL_WINDOWS:
+                random.Random(SEED).shuffle(windows)
+                return windows
+    if not windows:
+        raise RuntimeError(
+            f"TEXT_KL_LAMBDA={TEXT_KL_LAMBDA} but no anchor windows were built "
+            f"from {TEXT_KL_DATASET}/{TEXT_KL_CONFIG}. Refusing to train with a "
+            f"silently disabled anchor.")
+    random.Random(SEED).shuffle(windows)
+    return windows
+
+
+def text_anchor_kl(base, peft_model, input_ids):
+    """KL(p_adapter || p_base) on text logits. No CE: nothing is learned from
+    this text, the term only penalises drift of the text distribution.
+
+    Mirrors text_lm_loss() in 03_train_text.py so the two directions use the
+    same estimator.
+    """
+    logits_a = base(input_ids=input_ids)
+    logits_a = (logits_a.logits if hasattr(logits_a, "logits") else logits_a[0])
+    logits_a = logits_a[:, :-1, :].float()
+    with peft_model.disable_adapter():
+        with torch.no_grad():
+            logits_b = base(input_ids=input_ids)
+            logits_b = (logits_b.logits if hasattr(logits_b, "logits")
+                        else logits_b[0])[:, :-1, :].float()
+    log_p_a = F.log_softmax(logits_a, dim=-1)
+    log_p_b = F.log_softmax(logits_b, dim=-1)
+    return (log_p_a.exp() * (log_p_a - log_p_b)).sum(dim=-1).mean()
+
+
 def main():
     import wandb
     from transformers import (JanusForConditionalGeneration, JanusProcessor,
@@ -641,6 +715,11 @@ def main():
     print(f"  recon_loss_weight={RECON_LOSS_WEIGHT}  (0 = plain CE, Anole uses ~0.5)")
     print(f"  kl_lambda={KL_LAMBDA}  (0 = no reg; >0 enables the reg_type regularizer)")
     print(f"  reg_type={REG_TYPE}  (kl | mse | l2; kl/mse double the fwd cost, l2 is free)")
+    print(f"  text_kl_lambda={TEXT_KL_LAMBDA}  (0 = text head unprotected, the "
+          f"default and what every published run used)")
+    if TEXT_KL_LAMBDA > 0:
+        print(f"  text_anchor: {TEXT_KL_DATASET}/{TEXT_KL_CONFIG} "
+              f"seq_len={TEXT_KL_SEQ_LEN} windows={TEXT_KL_WINDOWS}")
     print(f"  dataset_source={DATASET_SOURCE}  lr_schedule={LR_SCHEDULE}")
     print(f"  caption_prefix={CAPTION_PREFIX!r}")
     print(f"  adam_betas=({ADAM_BETA1}, {ADAM_BETA2})")
@@ -648,6 +727,12 @@ def main():
     print(SEP + "\n")
 
     processor = JanusProcessor.from_pretrained(MODEL_ID)
+
+    text_anchor_windows = []
+    if TEXT_KL_LAMBDA > 0:
+        text_anchor_windows = build_text_anchor_windows(processor.tokenizer)
+        print(f"  text anchor: {len(text_anchor_windows)} windows of "
+              f"{TEXT_KL_SEQ_LEN} tokens", flush=True)
     base = JanusForConditionalGeneration.from_pretrained(
         MODEL_ID, torch_dtype=torch.bfloat16).to(
         "cuda" if torch.cuda.is_available() else "cpu")
@@ -729,6 +814,10 @@ def main():
         "recon_loss_weight": RECON_LOSS_WEIGHT,
         "kl_lambda":         KL_LAMBDA,
         "reg_type":          REG_TYPE,
+        "text_kl_lambda":    TEXT_KL_LAMBDA,
+        "text_kl_seq_len":   TEXT_KL_SEQ_LEN if TEXT_KL_LAMBDA > 0 else None,
+        "text_kl_corpus":    (f"{TEXT_KL_DATASET}/{TEXT_KL_CONFIG}"
+                              if TEXT_KL_LAMBDA > 0 else None),
         "loss_type": "+".join(
             ["ce"]
             + (["recon"]   if RECON_LOSS_WEIGHT > 0 else [])
@@ -775,7 +864,7 @@ def main():
     for epoch in range(start_epoch, EPOCHS):
         order = train_ids[:]
         rng.shuffle(order)
-        running, running_ce, running_recon, running_kl = 0.0, 0.0, 0.0, 0.0
+        running, running_ce, running_recon, running_kl, running_tkl = 0.0, 0.0, 0.0, 0.0, 0.0
         for i, img_id in enumerate(order):
             image = get_image(img_id)
             loss, ce_item, recon_item, kl_item = generation_loss(
@@ -784,11 +873,19 @@ def main():
                 kl_weight=KL_LAMBDA,
                 reg_type=REG_TYPE,
                 peft_model=peft_model)
+            tkl_item = 0.0
+            if TEXT_KL_LAMBDA > 0:
+                w = text_anchor_windows[global_step % len(text_anchor_windows)]
+                ids_t = torch.tensor([w], device=base.device)
+                tkl = text_anchor_kl(base, peft_model, ids_t)
+                loss = loss + TEXT_KL_LAMBDA * tkl
+                tkl_item = float(tkl.detach().item())
             (loss / GRAD_ACCUM).backward()
             running       += loss.item()
             running_ce    += ce_item
             running_recon += recon_item
             running_kl    += kl_item
+            running_tkl   += tkl_item
 
             if (i + 1) % GRAD_ACCUM == 0:
                 gnorm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
@@ -800,7 +897,8 @@ def main():
                 avg_ce    = running_ce    / GRAD_ACCUM
                 avg_recon = running_recon / GRAD_ACCUM
                 avg_kl    = running_kl    / GRAD_ACCUM
-                running, running_ce, running_recon, running_kl = 0.0, 0.0, 0.0, 0.0
+                avg_tkl   = running_tkl   / GRAD_ACCUM
+                running, running_ce, running_recon, running_kl, running_tkl = 0.0, 0.0, 0.0, 0.0, 0.0
                 cur_lr = scheduler.get_last_lr()[0]
                 wandb.log({"train/loss":       avg,
                            "train/loss_ce":    avg_ce,
@@ -813,6 +911,7 @@ def main():
                     extras = []
                     if RECON_LOSS_WEIGHT > 0: extras.append(f"recon={avg_recon:.4f}")
                     if KL_LAMBDA > 0:        extras.append(f"kl={avg_kl:.4f}")
+                    if TEXT_KL_LAMBDA > 0:   extras.append(f"tkl={avg_tkl:.4f}")
                     extra_str = (" " + " ".join(extras)) if extras else ""
                     print(f"  epoch {epoch} step {global_step} "
                           f"({i+1}/{len(order)}) loss={avg:.4f} ce={avg_ce:.4f}"

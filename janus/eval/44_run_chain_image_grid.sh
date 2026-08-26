@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --cpus-per-task=16
-#SBATCH --time=03:00:00
+#SBATCH --time=01:30:00
 #SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain_image_grid/slurm_%j.out
 #SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain_image_grid/slurm_%j.err
 #SBATCH --export=ALL
@@ -13,7 +13,7 @@
 # does it survive the text step that follows?
 #   sbatch janus/eval/44_run_chain_image_grid.sh
 #
-# 8 rows x 4 prompts = 32 generations, roughly 2-3 minutes each on one H100.
+# 4 rows x 5 prompts = 20 generations, roughly 2-3 minutes each on one H100.
 # Cells are cached to disk, so a re-run only fills what is missing.
 
 mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/chain_image_grid

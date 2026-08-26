@@ -43,21 +43,27 @@ SEED = int(os.environ.get("SEED", "42"))
 THUMB = int(os.environ.get("THUMB", "320"))
 
 # base is generated with the adapter disabled; the rest are adapter directories.
+# Chain A only by default: four rows is enough to see whether the style is
+# acquired at s2 and whether it survives s3. Widen with ROWS once that is known.
 DEFAULT_ROWS = [
     "base",
     "chainA_s1_welsh", "chainA_s2_naruto", "chainA_s3_medicine",
-    "chainB_s1_medicine", "chainB_s2_naruto", "chainB_s3_welsh",
-    "gen_7b_naruto_v5",
 ]
 ROWS = [r.strip() for r in os.environ.get("ROWS", ",".join(DEFAULT_ROWS)).split(",")
         if r.strip()]
 
-PROMPTS = [
+# Two characters (is the style acquired), one in-domain scene, two neutral
+# subjects (does the style bleed where it does not belong). Pipe-separated so a
+# prompt may contain commas: PROMPTS="a cat|a dog".
+DEFAULT_PROMPTS = [
     "a young man with spiky blond hair",
     "a woman with long dark hair",
+    "a ninja running through a forest",
     "a red fox sitting in a snowy forest",
     "a cup of coffee on a wooden table",
 ]
+PROMPTS = [p.strip() for p in os.environ.get(
+    "PROMPTS", "|".join(DEFAULT_PROMPTS)).split("|") if p.strip()]
 
 SEP = "=" * 72
 

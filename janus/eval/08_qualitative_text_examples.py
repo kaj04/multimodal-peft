@@ -104,7 +104,12 @@ def greedy_generate(model, tok, prompt, max_new_tokens):
         if tok.eos_token_id is not None and nxt == tok.eos_token_id:
             break
     cont_ids = ids[0, start_len:].tolist()
-    return tok.decode(cont_ids, skip_special_tokens=True).strip()
+    # Un-stripped on purpose: the damaged chain adapters put ~0.8 of their mass
+    # on newline and space, so the continuation is whitespace all the way and
+    # .strip() collapses it to "". An empty cell reads as a broken experiment;
+    # the caller keeps both forms so the write-up can show what was really
+    # emitted (see 43_first_token_collapse.py for the distributions).
+    return tok.decode(cont_ids, skip_special_tokens=True)
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +166,11 @@ def probe_freegen(model, processor):
     out = []
     for p in FREEGEN_PROMPTS:
         cont = greedy_generate(model, tok, p, GEN_TOKENS)
-        out.append({"prompt": p, "continuation": cont})
-        print(f"    [GEN] {p[:40]}... -> {cont[:60]}...", flush=True)
+        out.append({"prompt": p, "continuation": cont.strip(),
+                    "continuation_raw": cont,
+                    "n_chars_raw": len(cont),
+                    "all_whitespace": bool(cont) and not cont.strip()})
+        print(f"    [GEN] {p[:40]}... -> {cont[:60]!r}...", flush=True)
     return out
 
 

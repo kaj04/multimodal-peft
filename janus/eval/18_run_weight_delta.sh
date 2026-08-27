@@ -47,7 +47,11 @@ for r in 4 8 16 32 64; do A="$A;text_r$r=$O/text_poetry_r${r}_kl0.5/adapter_best
 for kl in 0 0.25 1 1.5; do A="$A;text_kl$(echo $kl|tr -d '.')=$O/text_poetry_r16_kl${kl}/adapter_best"; done
 # Strong text targets at r32 for a same-rank comparison: Welsh (language) vs
 # medicine (domain) vs poetry r32 above (style). KL differs (0.1/0.25/0.5).
-A="$A;text_welsh=$O/text_7b_welsh_r32_kl0.1/adapter_best"
+# text_welsh pointed at text_7b_welsh_r32_kl0.1, the adapter whose training was
+# cut short by the wall clock and which was replaced everywhere else in the
+# paper. It gives 0.598% here against the 1.9% the paper reports, so anyone
+# re-running this script would contradict the text.
+A="$A;text_welsh=$O/chainA_s1_welsh/adapter_best"
 A="$A;text_med=$O/text_med_r32_kl025/adapter_best"
 export ADAPTERS="${A#;}"
 fi

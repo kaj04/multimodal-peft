@@ -75,6 +75,19 @@ usable in the visual directions:
 | `eval/41_welsh_prompt_probe.py` | does the Welsh prompt reach the generator at all? |
 | `eval/42_welsh_text_vqa_control.py` | the same questions with the image replaced by a sentence, which is what showed the probe measures instruction following |
 
+## Running a whole block at once
+
+The scripts at the top of `janus/` chain several SLURM jobs, so one experiment block can be
+launched with a single command instead of submitting each step by hand.
+
+| Script | Launches |
+|---|---|
+| `run_text_sweep.sh` | the poetry rank and KL sweeps |
+| `run_text_peft_night.sh` | the poetry text adapter, training through evaluation |
+| `run_text_welsh_night.sh` | the Welsh target: training, held-out perplexity, the forgetting probes |
+| `run_xmodal_welsh.sh` | the cross-modal probes for the Welsh adapter |
+| `run_mauve_all.sh` | MAUVE for the base model and every headline adapter |
+
 ## The sequential chain
 
 The headline experiment. One adapter is trained three times in a row, each run starting

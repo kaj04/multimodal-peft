@@ -1,92 +1,70 @@
-# Multimodal PEFT — Early Fusion Model Study
+# Cross-Modal Forgetting and Transfer in Unified Multimodal Post-Training
 
-A systematic study of **Parameter-Efficient Fine-Tuning (LoRA)** on early fusion
-multimodal models, where all modalities share a unified token representation.
+Code and experiments for the paper, accepted at the **CL4FMAgents** workshop,
+NeurIPS 2026.
 
-> **Research question**: How does LoRA fine-tuning behave in models where text, images,
-> and other modalities are represented in the same discrete token space? Do cross-task
-> transfer patterns differ from late-fusion architectures?
+*Paper: arXiv link to be added.*
 
-## Models
+A unified multimodal model answers questions about images and generates images with one
+shared set of weights, so fine-tuning one capability can damage another that lives in a
+different modality. We measure what LoRA post-training of Janus-Pro-7B costs the
+capabilities it never trained.
 
-| Model | Architecture | Token space | Code |
-|-------|-------------|-------------|------|
-| [4M-21-XL](https://huggingface.co/EPFL-VILAB/4M-21_XL) | Encoder-decoder transformer | Per-modality VQ codes | root level |
-| [Chameleon-7B](https://huggingface.co/facebook/chameleon-7b) | Single transformer | Interleaved text+image | `chameleon/` |
+A single fine-tuning run leaves the untrained modality intact, even when the adapter cuts
+held-out Welsh perplexity by 76%. That safety belongs to the run and not to the recipe:
+chaining three runs destroys what was learned one run earlier and pushes general-text
+perplexity far below a model that was never fine-tuned. The cause is in the objective,
+which regularizes only the modality being trained and leaves the other head unconstrained.
+Adding a KL term on the untrained head removes the damage at no cost to acquisition.
 
-## Key findings (4M-21-XL)
+## Reproducing the paper
 
-- **Multi-task LoRA** outperforms single-task on caption and detection
-- **Sparse token sequences** (caption ~80% padding, det ~85%) cause premature
-  convergence without padding masking — fixed via `mask_padding=True` in `build_mod_dict`
-- **Asymmetric cross-task transfer**: caption LoRA improves semseg (+44% vs baseline),
-  while semseg LoRA degrades general visual encoding → semantic tasks transfer better
-  than VQ-code-prediction tasks
+Everything the paper reports comes from `janus/`.
+**[janus/README.md](janus/README.md)** maps each table and figure to the script that
+produces it, in the order the pipeline runs.
 
-## Repository structure
-
-```
-multimodal-peft/
-│
-├── ml-4m/                      # 4M codebase (submodule, read-only)
-├── cfgs/finetune/              # LoRA training configs (4M)
-│   ├── caption/
-│   ├── semseg/
-│   ├── det/
-│   ├── depth/
-│   ├── normal/
-│   └── multitask/
-├── scripts/snellius/           # SLURM job scripts (4M)
-├── run_finetuning_lora.py      # LoRA training script (4M)
-├── eval_all.py                 # Run all 5 task evals → row.json
-├── eval_caption_coco.py        # CIDEr / BLEU-4 on COCO val2017
-├── eval_semseg_coco.py         # mIoU on COCO panoptic val2017
-├── eval_det_coco.py            # AP50 / AP on COCO val2017
-├── eval_depth.py               # AbsRel / delta1 on NYUv2
-├── eval_normal_nyu.py          # Token accuracy on NYUv2 normals
-├── make_table.py               # Aggregate row.json -> markdown + LaTeX table
-│
-└── chameleon/                  # Chameleon-7B experiments
-    ├── tests/                  # Setup verification + inference tests
-    ├── cfgs/                   # Training configs (coming)
-    ├── scripts/                # SLURM scripts (coming)
-    └── README.md
-```
-
-## Reproducing 4M-21 experiments
-
-### Environment
 ```bash
-conda activate 4m-peft
-export HF_HOME=/scratch-shared/tesr125338/hf_cache
+git clone https://github.com/kaj04/multimodal-peft
+cd multimodal-peft
+source janus/env.sh                  # conda env, HF cache on scratch, repo as cwd
+python janus/eval/40_manifest.py     # every number the paper cites, read from the output tree
 ```
 
-### Training (Snellius)
-```bash
-sbatch scripts/snellius/39_ft_caption_coco_r8_attention_v2.sh   # caption (v2, pad fix)
-sbatch scripts/snellius/36_ft_det_coco_r8_attention.sh           # detection (v2)
-sbatch scripts/snellius/25_ft_semseg_coco_r8_attention.sh        # semseg
-sbatch scripts/snellius/37_ft_depth_nyu_r8_attention.sh          # depth
-sbatch scripts/snellius/38_ft_normal_nyu_r8_attention.sh         # normal
-sbatch scripts/snellius/40_ft_5task_r8_attention_v2.sh           # multitask (v2)
+`40_manifest.py` is the fastest way in. It walks the evaluation output tree and prints one
+row per adapter with every metric the paper quotes, so a number can be checked against its
+source without rerunning anything.
+
+Model weights, LoRA adapters and evaluation outputs are not in the repository. They are
+produced by the training and evaluation scripts and written to cluster scratch space; the
+`.gitignore` keeps them out deliberately.
+
+## Layout
+
+```
+janus/            the paper: training, evaluation, and the sequential-chain experiment
+earlier-trials/   models tried before Janus-Pro, kept for the record
 ```
 
-### Evaluation
-```bash
-sbatch --export=ALL,RUN_NAME=caption_v2,LORA=/path/to/lora_weights-best.pth \
-    scripts/snellius/35_eval_all.sh
+## Earlier trials
 
-python make_table.py \
-    --results output/eval_all/baseline/row.json \
-               output/eval_all/caption_v2/row.json \
-    --output results/table.md
+Janus-Pro was the fourth model we tried. 4M-21, Chameleon and Anole each failed for a
+different reason, and `earlier-trials/README.md` records what each attempt was and why it
+was dropped. The code is kept rather than deleted: the reasons those models did not work
+are part of why Janus-Pro is the right one for this question.
+
+## Citation
+
+```bibtex
+@inproceedings{colasurdo2026crossmodal,
+  title     = {Cross-Modal Forgetting and Transfer in Unified Multimodal Post-Training},
+  author    = {Colasurdo, Francesco and Slobozhan, Ivan and Vanschoren, Joaquin and Vettoruzzo, Anna},
+  booktitle = {NeurIPS 2026 Workshop on Continual Learning in the Era of Foundation Models
+               and Embodied Agents (CL4FMAgents)},
+  year      = {2026}
+}
 ```
-
-## Chameleon experiments
-
-See [`chameleon/README.md`](chameleon/README.md) for setup and instructions.
 
 ## Acknowledgements
 
-Built on [ml-4m](https://github.com/apple/ml-4m) (EPFL / Apple) and
-[Chameleon](https://huggingface.co/facebook/chameleon-7b) (Meta).
+Built on [Janus-Pro](https://huggingface.co/deepseek-community/Janus-Pro-7B) (DeepSeek).
+Experiments were run on the Dutch national supercomputer Snellius.

@@ -1,66 +1,105 @@
-# Janus-Pro PEFT experiments
+# Janus-Pro experiments
 
-LoRA / parameter-efficient fine-tuning experiments on **Janus-Pro** (DeepSeek),
-a natively unified multimodal model that does **both** image understanding
-(image → text) **and** image generation (text → image) from a single
-`nn.Module`, fully integrated in HuggingFace `transformers`.
+Everything the paper reports is produced here. The model is Janus-Pro-7B
+(`deepseek-community/Janus-Pro-7B`), a unified model with one shared transformer backbone
+and two separate modality encoders: SigLIP for understanding (image to text) and a
+vector-quantized tokenizer for generation (text to image).
 
-This is the active line of the project. Prior model trials (4M-21, Chameleon,
-Anole) are kept as archived folders / lessons-learned.
+## Setup
 
-## Why Janus-Pro (vs the dead ends)
-
-| Wall we hit | Chameleon | Anole | **Janus-Pro** |
-|-------------|:---:|:---:|:---:|
-| Native HF `transformers` | ✓ | ✗ (custom fork) | ✓ `JanusForConditionalGeneration` |
-| Weights accessible for PEFT | ✓ | ✗ (subprocess) | ✓ standard `nn.Module` |
-| Image generation enabled | ✗ (Meta disabled) | ✓ | ✓ `generation_mode="image"` |
-| Decoupled understanding/gen encoders | ✗ (shared → conflict) | ✗ | ✓ SigLIP + VQ-VAE |
-
-## Folder structure
-
-```
-janus/
-├── env.sh        # daily startup: source it to load env + HF cache + cd repo
-├── tests/        # sanity checks (inference smoke test, PEFT dry-run)
-├── data_prep/    # dataset prep / loaders (data itself lives on scratch)
-├── train/        # LoRA fine-tuning scripts
-└── eval/         # metrics: captioning (CIDEr), generation (CLIP/FID), forgetting matrix
+```bash
+source janus/env.sh
 ```
 
-Data and model weights are **not** in the repo — they live on Snellius scratch
-(`/scratch-shared/tesr125338/`). The HF cache auto-downloads model weights there.
+That activates the `janus` conda environment, points the Hugging Face cache at scratch
+space rather than at the home quota, and leaves you in the repository root. All commands
+below are run from there.
 
-## Environment
+Datasets and model weights are downloaded on first use. Adapters and evaluation results
+are written under `janus/train/output/` and `janus/tests/output/`, both ignored by git.
 
-Separate conda env `janus` (recent official `transformers` — incompatible with
-the `4m-peft` and `anole` envs, which pin different transformers versions).
+`tests/` holds the smoke tests that check the model loads and that LoRA gradients reach
+the adapter in each direction. Run them first if something looks wrong.
 
+## The fastest way in
+
+```bash
+python janus/eval/40_manifest.py
 ```
-source ~/multimodal-peft/janus/env.sh
+
+One row per adapter, every metric the paper quotes, read from the output tree rather than
+retyped. If a number is in the paper it is in this table.
+
+## Training
+
+| Script | Direction | Used for |
+|---|---|---|
+| `train/02_train_generation.py` | text to image | the image adapters: anime style, line sketches |
+| `train/03_train_text.py` | text to text | the text adapters: poetry, medicine, Welsh |
+| `train/04_train_joint.py` | both at once | the sensitivity control with an alternating text stream |
+| `train/03_rank_sweep.py` | — | drives the rank sweeps over an existing recipe |
+| `train/_chain_init.py` | — | loads a previous run's adapter into a fresh model; this is what makes a chain a chain |
+
+Each trainer has SLURM runners beside it (`02_run_*.sh`, `03_run_*.sh`). The configuration
+that the paper calls *Final* for image generation is `02_run_train_generation_7b_v5.sh`.
+
+Both trainers can anchor the adapter to the frozen base model with a KL penalty. In an
+image run that penalty is computed on the generation head; in a text run, on the text head.
+`TEXT_KL_LAMBDA` in `02_train_generation.py` adds the mirror term on text logits during an
+image run, which is the intervention of the paper's last section. It defaults to zero, so
+every earlier run is unaffected.
+
+## Evaluation
+
+| Script | Answers |
+|---|---|
+| `eval/06_metrics_panel.py` | did the image adapter learn the style? CMMD, KID, DINOv2, CLIP-IQA, CLIP directional similarity |
+| `eval/35_target_ppl.py` | did the text adapter learn the target? held-out perplexity, any target, any adapter |
+| `eval/07_forgetting_battery.py` | what happened to the capabilities we did not train? WikiText-2, MMLU, POPE, MME |
+| `eval/30`, `31`, `32_mauve_*.py` | free-form generation quality, in three phases: generate, score, tabulate |
+| `eval/18_weight_delta_norm.py` | how much did the adapter actually move the weights? |
+| `eval/25_probe_language_targets.py` | which language target to pick, scored by distance from the base model |
+| `eval/33_headroom.py` | how much of a benchmark score is real knowledge that could be lost, rather than luck |
+| `eval/38_reg_retention_table.py` | the five-regularizer ablation, assembled into one table |
+| `eval/45_siglip_update_check.py` | did the SigLIP adapters ever receive gradient? (they did not) |
+| `eval/40_manifest.py` | every number in the paper, reconciled from the output tree |
+
+Cross-modal transfer, the question of whether a language learned through text becomes
+usable in the visual directions:
+
+| Script | Probe |
+|---|---|
+| `eval/27_xmodal_welsh_t2i.py` | image generation from Welsh prompts, scored against the English reference |
+| `eval/28_xmodal_welsh_vqa.py` | visual question answering with the question in Welsh |
+| `eval/41_welsh_prompt_probe.py` | does the Welsh prompt reach the generator at all? |
+| `eval/42_welsh_text_vqa_control.py` | the same questions with the image replaced by a sentence, which is what showed the probe measures instruction following |
+
+## The sequential chain
+
+The headline experiment. One adapter is trained three times in a row, each run starting
+from the previous run's weights, in two mirrored orders.
+
+```bash
+bash janus/chain/run_both.sh
 ```
 
-## Roadmap (go slow, verify each link before the next)
+`chain/chain_config.sh` holds the frozen configuration. Nothing in it may differ between
+the two chains: they must differ only in the order of the tasks, or order is confounded
+with hyperparameters and the retention matrix cannot be read. `run_chain.sh` drives one
+chain through `train_text_step.sh`, `train_image_step.sh` and `eval_step.sh`.
 
-1. ✅ **Smoke test (1B)** — `tests/01_smoke_test.py`: model loads, understanding
-   (captions accurate) and generation (real 384x384 images) both work.
-2. ✅ **PEFT dry-run (1B)** — `tests/02_peft_dryrun.py`: LoRA injected (4.3M params,
-   0.21%); one training step PASSES in all three directions (understanding,
-   text-only, generation-custom-loss); gradients reach LoRA params in every case.
-   Finding: LoRA lands on the LM (192 tensors) + SigLIP understanding encoder
-   (144); generation path uses only the 192 LM tensors. *(The de-risk Anole failed.)*
-3. ✅ **Dataset + experiment design** — focus on CROSS-MODAL forgetting (the
-   understanding↔generation tension, unique to unified models). Dataset = COCO
-   val2017 split (train/eval disjoint); OOD domain forgetting kept as optional
-   later study. Metrics: CIDEr/BLEU (caption), CLIPScore (generation).
-4. ✅ **Baseline** — `eval/01_baseline.py`: metrics validated on pretrained 1B over
-   COCO val. Captioning CIDEr=0.30 / BLEU-4=0.14; generation CLIPScore=30.6.
-   (CIDEr deflated by the model's verbosity vs terse COCO refs — fine for relative
-   forgetting deltas.) Reusable scorers in `eval/metrics.py`.
-5. **Experiments** — `train/` + `eval/`:
-   - Exp 1: cross-modal forgetting transfer matrix (understanding ↔ generation)
-   - Exp 2: LoRA rank sweep (task gain vs forgetting vs trainable params)
-   - Exp 3: where to place LoRA (shared backbone vs decoupled pathways)
+Reading the result:
 
-   All on 1B first; scale winning configs to 7B for final numbers.
-```
+| Script | Produces |
+|---|---|
+| `eval/36_chain_matrix.py` | the retention matrix: performance on every target after every step |
+| `eval/44_chain_image_grid.py` | the image row of the chain figure, one prompt across all four stages |
+| `eval/08_qualitative_text_examples.py` | the text row of the same figure, greedy continuations at each stage |
+| `eval/43_first_token_collapse.py` | the next-token distribution that explains why the damaged model emits only whitespace |
+
+## A note on the numbering
+
+Scripts are numbered in the order they were written, not in the order the paper presents
+them, and there are gaps where an approach was abandoned. The numbering is kept because
+the SLURM runners, the logs and the output directories all refer to it. Use the tables
+above rather than the numbers to find what you need.

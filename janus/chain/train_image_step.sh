@@ -5,8 +5,8 @@
 #SBATCH --mem=100G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=08:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_img_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_img_%j.err
+#SBATCH --output=janus/tests/output/chain/slurm_img_%j.out
+#SBATCH --error=janus/tests/output/chain/slurm_img_%j.err
 #SBATCH --export=ALL
 #
 # The IMAGE step of a sequential chain (anime style).

@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=100G
 #SBATCH --time=04:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/gen_forgetting_lambda/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/gen_forgetting_lambda/slurm_%j.err
+#SBATCH --output=janus/tests/output/gen_forgetting_lambda/slurm_%j.out
+#SBATCH --error=janus/tests/output/gen_forgetting_lambda/slurm_%j.err
 #SBATCH --export=ALL
 
 # Question-A image-gen forgetting over the r16 lambda sweep: CMMD(adapter-gen
@@ -14,7 +14,7 @@
 #   sbatch janus/eval/17_run_gen_forgetting_lambda.sh
 #   cheaper/pricier: --export=ALL,N_GEN=96   /  N_GEN=256
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/gen_forgetting_lambda
+mkdir -p $HOME/multimodal-peft/janus/tests/output/gen_forgetting_lambda
 
 echo "================================================================"
 echo "  gen-forgetting lambda (Question A) | N_GEN=${N_GEN:-128}"

@@ -5,8 +5,8 @@
 #SBATCH --mem=100G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=01:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_smoke_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_smoke_%j.err
+#SBATCH --output=janus/tests/output/chain/slurm_smoke_%j.out
+#SBATCH --error=janus/tests/output/chain/slurm_smoke_%j.err
 #SBATCH --export=ALL
 #
 # SMOKE TEST -- run this before the real chains. Two tiny text steps, ~300

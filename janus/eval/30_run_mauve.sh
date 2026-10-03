@@ -5,15 +5,15 @@
 #SBATCH --mem=80G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=02:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/mauve/slurm_gen_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/mauve/slurm_gen_%j.err
+#SBATCH --output=janus/tests/output/mauve/slurm_gen_%j.out
+#SBATCH --error=janus/tests/output/mauve/slurm_gen_%j.err
 #SBATCH --export=ALL
 
 # Phase 1: free-form text generation for MAUVE (janus env). Needs TAG (+ ADAPTER,
 # TARGETS). Pre-export TARGETS (it contains commas) then --export=ALL.
 #   smoke: export TARGETS=welsh; sbatch --export=ALL,SMOKE=1,TAG=welsh_smoke,ADAPTER=... janus/eval/30_run_mauve.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/mauve
+mkdir -p $HOME/multimodal-peft/janus/tests/output/mauve
 module load 2023
 module load Anaconda3/2023.07-2
 source activate janus

@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=05:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/metrics_panel/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/metrics_panel/slurm_%j.err
+#SBATCH --output=janus/tests/output/metrics_panel/slurm_%j.out
+#SBATCH --error=janus/tests/output/metrics_panel/slurm_%j.err
 #SBATCH --export=ALL
 
 # Required env vars:
@@ -13,7 +13,7 @@
 # Optional:
 #   MODEL_ID, N_GEN, CAPTION_PREFIX
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/metrics_panel
+mkdir -p $HOME/multimodal-peft/janus/tests/output/metrics_panel
 
 echo "================================================================"
 echo "  Metrics panel | $(date)"

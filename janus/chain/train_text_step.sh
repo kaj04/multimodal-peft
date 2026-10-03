@@ -5,8 +5,8 @@
 #SBATCH --mem=100G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=06:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_txt_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_txt_%j.err
+#SBATCH --output=janus/tests/output/chain/slurm_txt_%j.out
+#SBATCH --error=janus/tests/output/chain/slurm_txt_%j.err
 #SBATCH --export=ALL
 #
 # One TEXT step of a sequential chain.

@@ -5,8 +5,8 @@
 #SBATCH --mem=120G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=14:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.err
+#SBATCH --output=janus/train/output/slurm_%j.out
+#SBATCH --error=janus/train/output/slurm_%j.err
 #SBATCH --export=ALL
 
 # =====================================================================
@@ -20,7 +20,7 @@
 #  - resume-capable: re-sbatch the same script if it hits the time limit
 # =====================================================================
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
+mkdir -p $HOME/multimodal-peft/janus/train/output
 
 echo "================================================================"
 echo "  Janus-Pro-7B LoRA GENERATION fine-tune (Naruto, hybrid prefix)"

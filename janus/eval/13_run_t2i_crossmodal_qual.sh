@@ -4,14 +4,14 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=00:40:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/t2i_crossmodal_qual/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/t2i_crossmodal_qual/slurm_%j.err
+#SBATCH --output=janus/tests/output/t2i_crossmodal_qual/slurm_%j.out
+#SBATCH --error=janus/tests/output/t2i_crossmodal_qual/slurm_%j.err
 #SBATCH --export=ALL
 
 # Cross-modal image test: base vs adapter, same prompts/seed. Needs ADAPTER.
 #   sbatch --export=ALL,ADAPTER=/path/to/adapter_best janus/eval/13_run_t2i_crossmodal_qual.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/t2i_crossmodal_qual
+mkdir -p $HOME/multimodal-peft/janus/tests/output/t2i_crossmodal_qual
 
 echo "================================================================"
 echo "  T2I cross-modal qualitative | ADAPTER=${ADAPTER}"

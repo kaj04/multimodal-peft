@@ -4,10 +4,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
 #SBATCH --time=00:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/dryrun/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/dryrun/slurm_%j.err
+#SBATCH --output=janus/tests/output/dryrun/slurm_%j.out
+#SBATCH --error=janus/tests/output/dryrun/slurm_%j.err
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/dryrun
+mkdir -p $HOME/multimodal-peft/janus/tests/output/dryrun
 
 echo "================================================================"
 echo "  Janus-Pro-1B PEFT dry-run"

@@ -4,11 +4,11 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting/slurm_%j.err
+#SBATCH --output=janus/tests/output/forgetting/slurm_%j.out
+#SBATCH --error=janus/tests/output/forgetting/slurm_%j.err
 #SBATCH --export=ALL
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting
+mkdir -p $HOME/multimodal-peft/janus/tests/output/forgetting
 
 echo "================================================================"
 echo "  Cross-modal forgetting eval (adapter OFF vs ON)"

@@ -5,8 +5,8 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=03:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_eval_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/chain/slurm_eval_%j.err
+#SBATCH --output=janus/tests/output/chain/slurm_eval_%j.out
+#SBATCH --error=janus/tests/output/chain/slurm_eval_%j.err
 #SBATCH --export=ALL
 #
 # One evaluation point of a sequential chain. Everything a single step needs is

@@ -4,14 +4,14 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=00:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/text_writing_qual/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/text_writing_qual/slurm_%j.err
+#SBATCH --output=janus/tests/output/text_writing_qual/slurm_%j.out
+#SBATCH --error=janus/tests/output/text_writing_qual/slurm_%j.err
 #SBATCH --export=ALL
 
 # Base-vs-adapter writing test. Needs ADAPTER.
 #   sbatch --export=ALL,ADAPTER=/path/to/adapter_best janus/eval/12_run_text_writing_qual.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/text_writing_qual
+mkdir -p $HOME/multimodal-peft/janus/tests/output/text_writing_qual
 
 echo "================================================================"
 echo "  Writing qualitative | ADAPTER=${ADAPTER}"

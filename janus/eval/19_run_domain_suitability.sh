@@ -5,8 +5,8 @@
 #SBATCH --mem=80G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/domain_suitability/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/domain_suitability/slurm_%j.err
+#SBATCH --output=janus/tests/output/domain_suitability/slurm_%j.out
+#SBATCH --error=janus/tests/output/domain_suitability/slurm_%j.err
 #SBATCH --export=ALL
 
 # Base-only suitability of candidate text-PEFT domains: PPL xControl + MMLU
@@ -14,7 +14,7 @@
 #   sbatch janus/eval/19_run_domain_suitability.sh
 # Knobs (optional): MMLU_PER_SUBJECT=50  MAX_WINDOWS=40  SMOKE=1 (tiny dry-run)
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/domain_suitability
+mkdir -p $HOME/multimodal-peft/janus/tests/output/domain_suitability
 
 echo "================================================================"
 echo "  Domain suitability | Started: $(date)"

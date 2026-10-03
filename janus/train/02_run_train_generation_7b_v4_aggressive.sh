@@ -5,8 +5,8 @@
 #SBATCH --mem=140G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=20:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.err
+#SBATCH --output=janus/train/output/slurm_%j.out
+#SBATCH --error=janus/train/output/slurm_%j.err
 #SBATCH --export=ALL
 
 # =====================================================================
@@ -42,7 +42,7 @@
 #  and keep the best adapter_epochN by val_CE + visual inspection.
 # =====================================================================
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
+mkdir -p $HOME/multimodal-peft/janus/train/output
 
 echo "================================================================"
 echo "  Janus-Pro-7B LoRA v4  (r=32, LR 8e-5, dropout 0.1, no prefix, KL_LAMBDA=0.5)"

@@ -4,11 +4,11 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=01:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/naruto_qual_7b/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/naruto_qual_7b/slurm_%j.err
+#SBATCH --output=janus/tests/output/naruto_qual_7b/slurm_%j.out
+#SBATCH --error=janus/tests/output/naruto_qual_7b/slurm_%j.err
 #SBATCH --export=ALL
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/naruto_qual_7b
+mkdir -p $HOME/multimodal-peft/janus/tests/output/naruto_qual_7b
 
 echo "================================================================"
 echo "  Naruto qualitative (2x2 prefix x adapter) comparison"

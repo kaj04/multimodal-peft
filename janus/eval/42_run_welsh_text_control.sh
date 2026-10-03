@@ -5,8 +5,8 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=00:20:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/welsh_text_ctrl_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/welsh_text_ctrl_%j.err
+#SBATCH --output=janus/tests/output/welsh_text_ctrl_%j.out
+#SBATCH --error=janus/tests/output/welsh_text_ctrl_%j.err
 #SBATCH --export=ALL
 #
 # Text-only control for the Welsh VQA probe. Needs ADAPTER.

@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/qualitative_text/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/qualitative_text/slurm_%j.err
+#SBATCH --output=janus/tests/output/qualitative_text/slurm_%j.out
+#SBATCH --error=janus/tests/output/qualitative_text/slurm_%j.err
 #SBATCH --export=ALL
 
 # Qualitative text examples (MMLU + free-gen + POPE/MME), one model per run:
@@ -14,7 +14,7 @@
 #   sbatch --export=ALL,ADAPTER=$HOME/multimodal-peft/janus/train/output/joint_7b_v5_matched/adapter_epoch6 janus/eval/08_run_qualitative_text.sh
 #   sbatch --export=ALL,ADAPTER=$HOME/multimodal-peft/janus/train/output/joint_7b_v5_far/adapter_epoch6 janus/eval/08_run_qualitative_text.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/qualitative_text
+mkdir -p $HOME/multimodal-peft/janus/tests/output/qualitative_text
 
 echo "================================================================"
 echo "  Qualitative text examples | $(date)"

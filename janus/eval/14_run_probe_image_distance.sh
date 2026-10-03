@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=00:40:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/image_distance_probe/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/image_distance_probe/slurm_%j.err
+#SBATCH --output=janus/tests/output/image_distance_probe/slurm_%j.out
+#SBATCH --error=janus/tests/output/image_distance_probe/slurm_%j.err
 #SBATCH --export=ALL
 
 # Rank candidate IMAGE styles by base-Janus VQ-token CE to pick the most
@@ -17,7 +17,7 @@
 #   plumbing check (4 images/style, ~2 min):
 #     sbatch --export=ALL,SMOKE=1 janus/eval/14_run_probe_image_distance.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/image_distance_probe
+mkdir -p $HOME/multimodal-peft/janus/tests/output/image_distance_probe
 
 echo "================================================================"
 echo "  Image-style distance probe   SMOKE=${SMOKE:-0}"

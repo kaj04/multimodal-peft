@@ -38,6 +38,21 @@ Once the experiments have run, `janus/eval/40_manifest.py` walks the output tree
 one row per adapter with every metric the paper quotes, so any number can be traced back to
 the file it came from.
 
+## What you need to run this
+
+The model is Janus-Pro-7B, so the experiments need a single 80 GB GPU; the chain steps were
+run on an H100 with 100 GB of host memory. Nothing here fits on a laptop, though all of it
+can be read on one.
+
+The SLURM scripts were written for Snellius, the Dutch national supercomputer. On another
+cluster expect to change the partition names and the `module load` lines. Paths inside
+`#SBATCH` directives are relative to the repository root, so submit from there, and create
+the two log directories once before the first job:
+
+```bash
+mkdir -p janus/train/output janus/tests/output
+```
+
 ## Layout
 
 ```

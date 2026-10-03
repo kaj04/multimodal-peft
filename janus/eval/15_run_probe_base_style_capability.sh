@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=00:40:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/base_style_capability/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/base_style_capability/slurm_%j.err
+#SBATCH --output=janus/tests/output/base_style_capability/slurm_%j.out
+#SBATCH --error=janus/tests/output/base_style_capability/slurm_%j.err
 #SBATCH --export=ALL
 
 # Generate a styles x contents grid with the BASE model to see which styles it
@@ -16,7 +16,7 @@
 #   custom styles (label=suffix;...) and/or contents (a;b;c):
 #     sbatch --export=ALL,STYLES="thermal=thermal camera image;low-poly=low poly 3D render" janus/eval/15_run_probe_base_style_capability.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/base_style_capability
+mkdir -p $HOME/multimodal-peft/janus/tests/output/base_style_capability
 
 echo "================================================================"
 echo "  Base style-capability probe"

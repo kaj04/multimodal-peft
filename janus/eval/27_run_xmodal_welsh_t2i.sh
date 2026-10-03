@@ -5,14 +5,14 @@
 #SBATCH --mem=80G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=02:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/xmodal_welsh_t2i/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/xmodal_welsh_t2i/slurm_%j.err
+#SBATCH --output=janus/tests/output/xmodal_welsh_t2i/slurm_%j.out
+#SBATCH --error=janus/tests/output/xmodal_welsh_t2i/slurm_%j.err
 #SBATCH --export=ALL
 
 # Exp A: Welsh prompt -> image faithfulness (CLIPScore vs English ref). Needs ADAPTER.
 #   smoke: sbatch --export=ALL,SMOKE=1,ADAPTER=... janus/eval/27_run_xmodal_welsh_t2i.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/xmodal_welsh_t2i
+mkdir -p $HOME/multimodal-peft/janus/tests/output/xmodal_welsh_t2i
 module load 2023
 module load Anaconda3/2023.07-2
 source activate janus

@@ -4,10 +4,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=40G
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/baseline/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/baseline/slurm_%j.err
+#SBATCH --output=janus/tests/output/baseline/slurm_%j.out
+#SBATCH --error=janus/tests/output/baseline/slurm_%j.err
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/baseline
+mkdir -p $HOME/multimodal-peft/janus/tests/output/baseline
 
 echo "================================================================"
 echo "  Janus-Pro-1B baseline metric validation"

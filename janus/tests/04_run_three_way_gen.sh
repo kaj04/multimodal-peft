@@ -5,8 +5,8 @@
 #SBATCH --mem=80G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/threeway/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/threeway/slurm_%j.err
+#SBATCH --output=janus/tests/output/threeway/slurm_%j.out
+#SBATCH --error=janus/tests/output/threeway/slurm_%j.err
 #SBATCH --export=ALL
 
 # Fair 3-way image generation (base | poetry | naruto) on a fixed prompt set.
@@ -14,7 +14,7 @@
 # Override the prompts (semicolon-separated) or the adapters via --export, e.g.:
 #   sbatch --export=ALL,PROMPTS="a cat;a dog" janus/tests/04_run_three_way_gen.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/threeway
+mkdir -p $HOME/multimodal-peft/janus/tests/output/threeway
 
 module load 2023
 module load Anaconda3/2023.07-2

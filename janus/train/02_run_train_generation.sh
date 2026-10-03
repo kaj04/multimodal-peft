@@ -4,10 +4,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=60G
 #SBATCH --time=04:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.err
+#SBATCH --output=janus/train/output/slurm_%j.out
+#SBATCH --error=janus/train/output/slurm_%j.err
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
+mkdir -p $HOME/multimodal-peft/janus/train/output
 
 echo "================================================================"
 echo "  Janus-Pro-1B LoRA GENERATION fine-tune (custom loss)"

@@ -5,8 +5,8 @@
 #SBATCH --mem=140G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=04:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.err
+#SBATCH --output=janus/train/output/slurm_%j.out
+#SBATCH --error=janus/train/output/slurm_%j.err
 #SBATCH --export=ALL
 
 # Text (poetry) LoRA on Janus-Pro-7B. The wall-clock budget is enforced by
@@ -16,7 +16,7 @@
 # All knobs are ${VAR:-default} so an sbatch --export overrides them WITHOUT a
 # hard export silently winning (the bug that wrecked the rank/KL sweeps).
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
+mkdir -p $HOME/multimodal-peft/janus/train/output
 
 echo "================================================================"
 echo "  Janus-Pro-7B TEXT LoRA (poetry)"

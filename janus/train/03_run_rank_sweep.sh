@@ -4,12 +4,12 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=60G
 #SBATCH --time=06:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/sweep_slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/sweep_slurm_%j.err
+#SBATCH --output=janus/train/output/sweep_slurm_%j.out
+#SBATCH --error=janus/train/output/sweep_slurm_%j.err
 #SBATCH --export=ALL
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting
+mkdir -p $HOME/multimodal-peft/janus/train/output
+mkdir -p $HOME/multimodal-peft/janus/tests/output/forgetting
 
 echo "================================================================"
 echo "  Janus-Pro-1B LoRA captioning rank sweep"

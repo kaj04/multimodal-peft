@@ -5,8 +5,8 @@
 #SBATCH --mem=140G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.err
+#SBATCH --output=janus/train/output/slurm_%j.out
+#SBATCH --error=janus/train/output/slurm_%j.err
 #SBATCH --export=ALL
 
 # =====================================================================
@@ -33,7 +33,7 @@
 #  If still weak: bump LORA_RANK=96; if it degrades content, add KL_LAMBDA=0.1.
 # =====================================================================
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
+mkdir -p $HOME/multimodal-peft/janus/train/output
 
 echo "================================================================"
 echo "  Pixel-art STRONG (raw captions, KL=0, r=64, no prefix, 8 epochs)"

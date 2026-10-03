@@ -5,15 +5,15 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=8
 #SBATCH --time=00:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/confidence_intervals/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/confidence_intervals/slurm_%j.err
+#SBATCH --output=janus/tests/output/confidence_intervals/slurm_%j.out
+#SBATCH --error=janus/tests/output/confidence_intervals/slurm_%j.err
 #SBATCH --export=ALL
 
 # Bootstrap 95% CI for CMMD / Gen-CMMD. Pass GEN_DIR (+ REF_DIR or HF_DATASET_NAME)
 # and LABEL via the environment (pre-export space/odd values, then --export=ALL).
 #   GEN_DIR=... HF_DATASET_NAME=... LABEL=... sbatch janus/eval/21_run_bootstrap_cmmd.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/confidence_intervals
+mkdir -p $HOME/multimodal-peft/janus/tests/output/confidence_intervals
 
 echo "================================================================"
 echo "  CMMD bootstrap CI | LABEL=${LABEL}  GEN_DIR=${GEN_DIR}"

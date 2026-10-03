@@ -4,14 +4,14 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=00:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/writing_rank_compare/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/writing_rank_compare/slurm_%j.err
+#SBATCH --output=janus/tests/output/writing_rank_compare/slurm_%j.out
+#SBATCH --error=janus/tests/output/writing_rank_compare/slurm_%j.err
 #SBATCH --export=ALL
 
 # Side-by-side poetry continuations base + r4/r8/r16/r32/r64 -> pick the rank.
 #   sbatch janus/eval/16_run_compare_writing_ranks.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/writing_rank_compare
+mkdir -p $HOME/multimodal-peft/janus/tests/output/writing_rank_compare
 
 echo "================================================================"
 echo "  Writing rank compare"

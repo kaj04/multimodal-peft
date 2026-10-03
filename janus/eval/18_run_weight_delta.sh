@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=00:20:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/weight_delta/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/weight_delta/slurm_%j.err
+#SBATCH --output=janus/tests/output/weight_delta/slurm_%j.out
+#SBATCH --error=janus/tests/output/weight_delta/slurm_%j.err
 #SBATCH --export=ALL
 
 # ||DeltaW||/||W|| for ALL image+text adapters. CPU-only (matrix norms, no
@@ -15,7 +15,7 @@
 # If 'genoa' is rejected, override at submit time, e.g.:
 #   sbatch --partition=gpu_h100 --gres=gpu:h100:1 janus/eval/18_run_weight_delta.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/weight_delta
+mkdir -p $HOME/multimodal-peft/janus/tests/output/weight_delta
 
 module load 2023
 module load Anaconda3/2023.07-2

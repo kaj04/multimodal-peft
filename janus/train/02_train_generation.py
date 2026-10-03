@@ -2,7 +2,7 @@
 """
 janus/train/02_train_generation.py
 
-LoRA fine-tuning of Janus-Pro-1B on the GENERATION direction (text -> image).
+LoRA fine-tuning of Janus-Pro on the GENERATION direction (text -> image).
 
 This direction is NOT supported by the stock HF forward (which only computes
 text loss), so we use a CUSTOM training step — the exact path validated in the
@@ -51,7 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "eval"))
 from metrics import CLIPScorer, generate_image  # noqa: E402
 
 # --- CONFIG (env-overridable) ----------------------------------------------
-MODEL_ID   = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-1B")
+MODEL_ID   = os.environ.get("MODEL_ID", "deepseek-community/Janus-Pro-7B")
 COCO_DIR   = Path("/scratch-shared/tesr125338/coco")
 COCO_SPLIT = os.environ.get("COCO_SPLIT", "val2017")   # val2017 | train2017
 VAL_IMAGES = COCO_DIR / COCO_SPLIT

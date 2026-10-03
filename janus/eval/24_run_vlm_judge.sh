@@ -5,8 +5,8 @@
 #SBATCH --mem=80G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/vlm_judge/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/vlm_judge/slurm_%j.err
+#SBATCH --output=janus/tests/output/vlm_judge/slurm_%j.out
+#SBATCH --error=janus/tests/output/vlm_judge/slurm_%j.err
 #SBATCH --export=ALL
 
 # LLM-as-judge with an INDEPENDENT open VLM (Qwen2-VL-7B). Pairwise, counterbalanced.
@@ -14,7 +14,7 @@
 #   full:          sbatch janus/eval/24_run_vlm_judge.sh
 #   other pair:    sbatch --export=ALL,PAIR=kl0.5,kl1 janus/eval/24_run_vlm_judge.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/vlm_judge
+mkdir -p $HOME/multimodal-peft/janus/tests/output/vlm_judge
 
 module load 2023
 module load Anaconda3/2023.07-2

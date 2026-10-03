@@ -4,11 +4,11 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/pixelart_qual/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/pixelart_qual/slurm_%j.err
+#SBATCH --output=janus/tests/output/pixelart_qual/slurm_%j.out
+#SBATCH --error=janus/tests/output/pixelart_qual/slurm_%j.err
 #SBATCH --export=ALL
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/pixelart_qual
+mkdir -p $HOME/multimodal-peft/janus/tests/output/pixelart_qual
 
 echo "================================================================"
 echo "  Pixel-art qualitative (5 prompts x 4 conditions)"

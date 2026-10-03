@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=60G
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/metrics_panel/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/metrics_panel/slurm_%j.err
+#SBATCH --output=janus/tests/output/metrics_panel/slurm_%j.out
+#SBATCH --error=janus/tests/output/metrics_panel/slurm_%j.err
 #SBATCH --export=ALL
 
 # Compute ONLY ArtFID for all adapters under metrics_panel/, reusing the

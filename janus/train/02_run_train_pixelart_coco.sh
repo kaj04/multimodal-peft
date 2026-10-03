@@ -5,8 +5,8 @@
 #SBATCH --mem=140G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=08:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/train/output/slurm_%j.err
+#SBATCH --output=janus/train/output/slurm_%j.out
+#SBATCH --error=janus/train/output/slurm_%j.err
 #SBATCH --export=ALL
 
 # =====================================================================
@@ -31,7 +31,7 @@
 #  PIXELART_COLORS=16.
 # =====================================================================
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/train/output
+mkdir -p $HOME/multimodal-peft/janus/train/output
 
 echo "================================================================"
 echo "  Pixel-art on COCO (synthesized) | r=48 KL=0.5  split=${COCO_SPLIT:-val2017}"

@@ -5,8 +5,8 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=8
 #SBATCH --time=00:30:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/metric_debug/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/metric_debug/slurm_%j.err
+#SBATCH --output=janus/tests/output/metric_debug/slurm_%j.out
+#SBATCH --error=janus/tests/output/metric_debug/slurm_%j.err
 #SBATCH --export=ALL
 
 # Metric-debugging suite for the KL sweep (train-vs-test consistency, memorization,
@@ -14,7 +14,7 @@
 # images; no retraining, no regeneration.
 #   sbatch janus/eval/23_run_metric_debug.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/metric_debug
+mkdir -p $HOME/multimodal-peft/janus/tests/output/metric_debug
 
 module load 2023
 module load Anaconda3/2023.07-2

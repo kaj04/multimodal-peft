@@ -5,8 +5,8 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
 #SBATCH --time=00:20:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/first_token_collapse/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/first_token_collapse/slurm_%j.err
+#SBATCH --output=janus/tests/output/first_token_collapse/slurm_%j.out
+#SBATCH --error=janus/tests/output/first_token_collapse/slurm_%j.err
 #SBATCH --export=ALL
 #
 # Why the damaged chain models return an empty continuation. Needs ADAPTER.
@@ -14,7 +14,7 @@
 #
 # Six prompts, one forward pass each, base and adapter in the same process.
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/first_token_collapse
+mkdir -p $HOME/multimodal-peft/janus/tests/output/first_token_collapse
 
 module load 2023
 module load Anaconda3/2023.07-2

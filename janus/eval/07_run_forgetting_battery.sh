@@ -4,8 +4,8 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=80G
 #SBATCH --time=05:00:00
-#SBATCH --output=/home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting_battery/slurm_%j.out
-#SBATCH --error=/home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting_battery/slurm_%j.err
+#SBATCH --output=janus/tests/output/forgetting_battery/slurm_%j.out
+#SBATCH --error=janus/tests/output/forgetting_battery/slurm_%j.err
 #SBATCH --export=ALL
 
 # Cross-modal forgetting battery (PPL + MMLU + POPE + MME).
@@ -24,7 +24,7 @@
 # SMOKE TEST FIRST (plumbing check, ~10 min):
 #   sbatch --export=ALL,SMOKE=1,ADAPTER= janus/eval/07_run_forgetting_battery.sh
 
-mkdir -p /home/fcolasurdo/multimodal-peft/janus/tests/output/forgetting_battery
+mkdir -p $HOME/multimodal-peft/janus/tests/output/forgetting_battery
 
 echo "================================================================"
 echo "  Forgetting battery | $(date)"

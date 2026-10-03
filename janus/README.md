@@ -13,7 +13,8 @@ source janus/env.sh
 
 That activates the `janus` conda environment, points the Hugging Face cache at scratch
 space rather than at the home quota, and leaves you in the repository root. All commands
-below are run from there.
+below are run from there. Outside the cluster, `requirements.txt` in this folder lists what
+the scripts import.
 
 Datasets and model weights are downloaded on first use. Adapters and evaluation results
 are written under `janus/train/output/` and `janus/tests/output/`, both ignored by git.

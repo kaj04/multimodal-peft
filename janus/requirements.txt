@@ -1,0 +1,31 @@
+# Dependencies of the Janus-Pro experiments.
+#
+# Versions are deliberately not pinned: the runs were made in a conda environment
+# built on the cluster (see env.sh), and pinning versions we did not verify outside
+# it would promise a reproducibility we cannot check. The one hard requirement is
+# that transformers must be recent enough to provide JanusForConditionalGeneration.
+
+torch
+torchvision
+transformers
+peft
+datasets
+huggingface_hub
+safetensors
+accelerate
+
+numpy
+scipy
+pillow
+matplotlib
+
+# metrics
+pyiqa              # CLIP-IQA
+clean-fid          # FID / KID
+pycocoevalcap      # CIDEr, BLEU (captioning direction only)
+
+# free-form text quality; needs its own environment, see eval/setup_mauve_venv.sh
+mauve-text
+
+# optional, training only
+wandb

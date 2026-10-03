@@ -114,6 +114,9 @@ Reading the result:
 ## A note on the numbering
 
 Scripts are numbered in the order they were written, not in the order the paper presents
-them, and there are gaps where an approach was abandoned. The numbering is kept because
+them, and there are gaps where an approach was abandoned. The lowest numbers are the
+earliest: `eval/01`, `eval/02`, `eval/04`, `eval/05` and the two tests in `tests/` default
+to Janus-Pro-1B, which is what the exploratory phase ran on. Every result in the paper is
+Janus-Pro-7B. The numbering is kept because
 the SLURM runners, the logs and the output directories all refer to it. Use the tables
 above rather than the numbers to find what you need.

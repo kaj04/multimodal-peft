@@ -23,20 +23,20 @@ Everything the paper reports comes from `janus/`.
 **[janus/README.md](janus/README.md)** maps each table and figure to the script that
 produces it, in the order the pipeline runs.
 
+Model weights, LoRA adapters and evaluation outputs are not in the repository. They are
+written to cluster scratch space by the training and evaluation scripts, and the
+`.gitignore` keeps them out deliberately, so a fresh clone gives you the code and not the
+results.
+
 ```bash
 git clone https://github.com/kaj04/multimodal-peft
 cd multimodal-peft
-source janus/env.sh                  # conda env, HF cache on scratch, repo as cwd
-python janus/eval/40_manifest.py     # every number the paper cites, read from the output tree
+source janus/env.sh     # conda env, Hugging Face cache on scratch, repo as cwd
 ```
 
-`40_manifest.py` is the fastest way in. It walks the evaluation output tree and prints one
-row per adapter with every metric the paper quotes, so a number can be checked against its
-source without rerunning anything.
-
-Model weights, LoRA adapters and evaluation outputs are not in the repository. They are
-produced by the training and evaluation scripts and written to cluster scratch space; the
-`.gitignore` keeps them out deliberately.
+Once the experiments have run, `janus/eval/40_manifest.py` walks the output tree and prints
+one row per adapter with every metric the paper quotes, so any number can be traced back to
+the file it came from.
 
 ## Layout
 

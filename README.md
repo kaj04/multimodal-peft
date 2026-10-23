@@ -3,7 +3,7 @@
 Code and experiments for the paper, accepted at the **CL4FMAgents** workshop,
 NeurIPS 2026.
 
-*Paper: arXiv link to be added.*
+*Paper: [arXiv:2610.23918](https://arxiv.org/abs/2610.23918)*
 
 A unified multimodal model answers questions about images and generates images with one
 shared set of weights, so fine-tuning one capability can damage another that lives in a
@@ -75,7 +75,11 @@ are part of why Janus-Pro is the right one for this question.
   author    = {Colasurdo, Francesco and Slobozhan, Ivan and Vanschoren, Joaquin and Vettoruzzo, Anna},
   booktitle = {NeurIPS 2026 Workshop on Continual Learning in the Era of Foundation Models
                and Embodied Agents (CL4FMAgents)},
-  year      = {2026}
+  year      = {2026},
+  eprint    = {2610.23918},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url       = {https://arxiv.org/abs/2610.23918}
 }
 ```
 
